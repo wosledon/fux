@@ -1,12 +1,11 @@
-import { useEffect, useMemo, useRef, useState } from 'react'
+import { useEffect, useMemo, useRef } from 'react'
 import { Outlet, useNavigate, useParams, NavLink } from 'react-router-dom'
 import { useQuery, useQueryClient } from '@tanstack/react-query'
-import { AppBar, Toolbar, Typography, IconButton, Drawer, List, ListItemButton, ListItemIcon, ListItemText, Box, Chip, Badge, Popover, Divider, Tooltip, Button } from '@mui/material'
-import ArrowBackIcon from '@mui/icons-material/ArrowBack'
-import NotificationsIcon from '@mui/icons-material/Notifications'
-import SmartToyIcon from '@mui/icons-material/SmartToy'
+import { Box, ButtonBase, Chip, Divider, IconButton, List, ListItemButton, ListItemIcon, ListItemText, Tooltip, Typography } from '@mui/material'
 import LogoutIcon from '@mui/icons-material/Logout'
 import ViewKanbanIcon from '@mui/icons-material/ViewKanban'
+import SmartToyIcon from '@mui/icons-material/SmartToy'
+import InboxIcon from '@mui/icons-material/Inbox'
 import FolderIcon from '@mui/icons-material/Folder'
 import CategoryIcon from '@mui/icons-material/Category'
 import PsychologyIcon from '@mui/icons-material/Psychology'
@@ -16,10 +15,10 @@ import SchoolIcon from '@mui/icons-material/School'
 import HubIcon from '@mui/icons-material/Hub'
 import PeopleIcon from '@mui/icons-material/People'
 import DnsIcon from '@mui/icons-material/Dns'
-import { get, post, workspaceEventsUrl, type Workspace } from '../api'
+import ChevronRightIcon from '@mui/icons-material/ChevronRight'
+import { get, workspaceEventsUrl, type Workspace } from '../api'
 import { useAuth } from '../auth'
 import { Logo, PersonAvatar } from '../ui'
-import AssistantPanel from './AssistantPanel'
 
 export interface WsCtx { wsId: string; role: string; workspace: Workspace }
 
@@ -27,6 +26,8 @@ const NAV_GROUPS = [
   {
     label: '工作台', items: [
       { to: '', label: '工作看板', icon: <ViewKanbanIcon /> },
+      { to: 'assistant', label: 'AI 助理', icon: <SmartToyIcon /> },
+      { to: 'inbox', label: '收件箱', icon: <InboxIcon /> },
       { to: 'projects', label: '项目', icon: <FolderIcon /> },
       { to: 'types', label: '任务类型', icon: <CategoryIcon /> },
     ],
@@ -54,13 +55,11 @@ export default function WorkspaceLayout() {
   const qc = useQueryClient()
   const { user, logout } = useAuth()
   const { data } = useQuery({ queryKey: ['workspace', wsId], queryFn: () => get<{ workspace: Workspace; role: string }>(`/workspaces/${wsId}`) })
-  const [assistantOpen, setAssistantOpen] = useState(false)
-  const [notifAnchor, setNotifAnchor] = useState<HTMLElement | null>(null)
   const timer = useRef<number>(0)
 
   const { data: notifs = [] } = useQuery({
     queryKey: ['notifications', wsId],
-    queryFn: () => get<{ notification: any; read: boolean }[]>(`/workspaces/${wsId}/notifications`),
+    queryFn: () => get<{ notification: { id: string }; read: boolean }[]>(`/workspaces/${wsId}/notifications`),
     refetchInterval: 15000,
   })
   const unread = notifs.filter(n => !n.read).length
@@ -86,100 +85,80 @@ export default function WorkspaceLayout() {
   const ctx: WsCtx | null = useMemo(() => data ? { wsId, role: data.role, workspace: data.workspace } : null, [data, wsId])
   if (!ctx) return null
 
+  const roleLabel = ctx.role === 'owner' ? '所有者' : ctx.role === 'admin' ? '管理员' : '成员'
+
   return (
     <Box sx={{ display: 'flex', height: '100%', bgcolor: 'background.default' }}>
-      <Drawer variant="permanent" sx={{ width: 216, flexShrink: 0, '& .MuiDrawer-paper': { width: 216, boxSizing: 'border-box', bgcolor: 'background.paper' } }}>
-        <Box sx={{ px: 2, py: 1.75, display: 'flex', alignItems: 'center' }}>
-          <Logo size={28} />
+      <Box component="aside" sx={{
+        width: 240, flexShrink: 0, display: 'flex', flexDirection: 'column',
+        bgcolor: '#0f131b', borderRight: '1px solid', borderColor: 'divider',
+      }}>
+        <Box sx={{ px: 3, py: 3 }}><Logo size={30} /></Box>
+        <Box sx={{ px: 2, pb: 2.5 }}>
+          <ButtonBase onClick={() => nav('/')} sx={{
+            width: '100%', p: 1.25, borderRadius: 3, textAlign: 'left', gap: 1.25,
+            border: '1px solid', borderColor: 'divider', bgcolor: 'rgba(255,255,255,0.025)',
+            transition: 'background-color .15s, border-color .15s',
+            '&:hover': { bgcolor: 'action.hover', borderColor: 'rgba(139,157,255,0.3)' },
+          }}>
+            <Box sx={{
+              width: 34, height: 34, borderRadius: 2, display: 'grid', placeItems: 'center', flexShrink: 0,
+              color: 'primary.light', bgcolor: 'rgba(139,157,255,0.12)', fontWeight: 800,
+            }}>{ctx.workspace.name.slice(0, 1)}</Box>
+            <Box sx={{ flexGrow: 1, minWidth: 0 }}>
+              <Typography variant="body2" fontWeight={700} noWrap>{ctx.workspace.name}</Typography>
+              <Typography variant="caption" color="text.secondary">{roleLabel}工作区</Typography>
+            </Box>
+            <ChevronRightIcon sx={{ fontSize: 18, color: 'text.secondary' }} />
+          </ButtonBase>
         </Box>
         <Divider />
-        <Box sx={{ px: 2, py: 1.5 }}>
-          <Typography variant="caption" color="text.secondary" sx={{ letterSpacing: '0.06em' }}>当前工作区</Typography>
-          <Box sx={{ display: 'flex', alignItems: 'center', gap: 1, mt: 0.5 }}>
-            <Typography fontWeight={700} sx={{ flexGrow: 1, minWidth: 0, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
-              {ctx.workspace.name}
-            </Typography>
-            <Chip size="small" label={ctx.role} variant="outlined" />
-          </Box>
-        </Box>
-        <Divider />
-        <Box sx={{ overflowY: 'auto', flexGrow: 1, py: 1 }}>
+        <Box component="nav" sx={{ overflowY: 'auto', flexGrow: 1, py: 1.5 }}>
           {NAV_GROUPS.map(g => (
-            <Box key={g.label} sx={{ mb: 1 }}>
-              <Typography variant="caption" color="text.secondary" sx={{ px: 2.5, py: 0.5, display: 'block', letterSpacing: '0.06em' }}>
+            <Box key={g.label} sx={{ mb: 1.25 }}>
+              <Typography variant="caption" sx={{ px: 3, py: 0.75, display: 'block', color: '#69748a', fontSize: 11, fontWeight: 700, letterSpacing: '0.1em' }}>
                 {g.label}
               </Typography>
               <List dense disablePadding>
                 {g.items.map(n => (
                   <ListItemButton key={n.to} component={NavLink} to={`/ws/${wsId}${n.to ? '/' + n.to : ''}`} end={n.to === ''}
                     sx={{
-                      '&.active': { bgcolor: 'action.selected', color: 'primary.light', '& .MuiListItemIcon-root': { color: 'primary.light' } },
+                      color: 'text.secondary', minHeight: 40,
+                      '& .MuiListItemIcon-root': { color: '#768197', transition: 'color .15s' },
+                      '&:hover': { color: 'text.primary', '& .MuiListItemIcon-root': { color: 'text.primary' } },
+                      '&.active': {
+                        bgcolor: 'rgba(139,157,255,0.12)', color: 'primary.light',
+                        '& .MuiListItemIcon-root': { color: 'primary.light' },
+                        '&::before': { content: '""', position: 'absolute', left: 0, top: 10, bottom: 10, width: 3, borderRadius: 2, bgcolor: 'primary.main' },
+                      },
                     }}>
-                    <ListItemIcon sx={{ minWidth: 34, color: 'text.secondary' }}>{n.icon}</ListItemIcon>
-                    <ListItemText primary={n.label} primaryTypographyProps={{ fontSize: 13, fontWeight: 600 }} />
+                    <ListItemIcon sx={{ minWidth: 34, '& svg': { fontSize: 20 } }}>{n.icon}</ListItemIcon>
+                    <ListItemText primary={n.label} primaryTypographyProps={{ fontSize: 13.5, fontWeight: 600 }} />
+                    {n.to === 'inbox' && unread > 0 && <Chip size="small" label={unread} color="primary" sx={{ height: 20, minWidth: 20, fontSize: 11 }} />}
                   </ListItemButton>
                 ))}
               </List>
             </Box>
           ))}
         </Box>
-        <Divider />
-        <Box sx={{ p: 1.5, display: 'flex', alignItems: 'center', gap: 1 }}>
-          <PersonAvatar name={user?.displayName || user?.username} size={28} />
-          <Typography variant="body2" sx={{ flexGrow: 1, minWidth: 0, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
-            {user?.displayName}
-          </Typography>
-          <Tooltip title="退出登录"><IconButton size="small" onClick={logout}><LogoutIcon fontSize="small" /></IconButton></Tooltip>
-        </Box>
-      </Drawer>
-
-      <Box sx={{ flexGrow: 1, display: 'flex', flexDirection: 'column', minWidth: 0 }}>
-        <AppBar position="static" color="transparent" elevation={0} sx={{ borderBottom: '1px solid', borderColor: 'divider', bgcolor: 'rgba(16,20,28,0.7)', backdropFilter: 'blur(12px)' }}>
-          <Toolbar variant="dense" sx={{ gap: 0.5 }}>
-            <Tooltip title="返回工作区列表">
-              <IconButton size="small" onClick={() => nav('/')} sx={{ mr: 0.5 }}><ArrowBackIcon fontSize="small" /></IconButton>
-            </Tooltip>
-            <Typography fontWeight={700} sx={{ flexGrow: 1 }}>{ctx.workspace.name}</Typography>
-            <Button size="small" startIcon={<SmartToyIcon />} onClick={() => setAssistantOpen(true)}
-              variant={assistantOpen ? 'contained' : 'outlined'} sx={{ mr: 1 }}>
-              AI 助理
-            </Button>
-            <Tooltip title="通知">
-              <IconButton onClick={e => setNotifAnchor(e.currentTarget)}>
-                <Badge badgeContent={unread} color="error"><NotificationsIcon /></Badge>
-              </IconButton>
-            </Tooltip>
-          </Toolbar>
-        </AppBar>
-        <Box sx={{ flexGrow: 1, minHeight: 0, overflow: 'hidden' }}>
-          <Outlet context={ctx} />
+        <Box sx={{ p: 2, borderTop: '1px solid', borderColor: 'divider' }}>
+          <Box sx={{ display: 'flex', alignItems: 'center', gap: 1.25, px: 0.5 }}>
+            <PersonAvatar name={user?.displayName || user?.username} size={32} />
+            <Box sx={{ flexGrow: 1, minWidth: 0 }}>
+              <Typography variant="body2" fontWeight={600} noWrap>{user?.displayName}</Typography>
+              <Typography variant="caption" color="text.secondary" noWrap display="block">@{user?.username}</Typography>
+            </Box>
+            <Tooltip title="退出登录"><IconButton size="small" onClick={logout}><LogoutIcon fontSize="small" /></IconButton></Tooltip>
+          </Box>
         </Box>
       </Box>
 
-      <Popover open={!!notifAnchor} anchorEl={notifAnchor} onClose={() => setNotifAnchor(null)}
-        anchorOrigin={{ vertical: 'bottom', horizontal: 'right' }} transformOrigin={{ vertical: 'top', horizontal: 'right' }}
-        slotProps={{ paper: { sx: { borderRadius: 3, border: '1px solid', borderColor: 'divider', mt: 1 } } }}>
-        <Box sx={{ width: 380, maxHeight: 440, overflow: 'auto' }}>
-          <Box sx={{ px: 2, py: 1.5, display: 'flex', alignItems: 'center' }}>
-            <Typography fontWeight={700} sx={{ flexGrow: 1 }}>通知</Typography>
-            {unread > 0 && <Chip size="small" label={`${unread} 未读`} color="error" />}
-          </Box>
-          <Divider />
-          {notifs.length === 0 && <Typography color="text.secondary" sx={{ p: 3, textAlign: 'center' }}>暂无通知</Typography>}
-          {notifs.map(({ notification: n, read }) => (
-            <Box key={n.id} sx={{ px: 2, py: 1.5, borderBottom: '1px solid', borderColor: 'divider', bgcolor: read ? 'transparent' : 'rgba(109,141,255,0.06)', display: 'flex', gap: 1, alignItems: 'center' }}>
-              <Box sx={{ width: 8, height: 8, borderRadius: '50%', bgcolor: read ? 'transparent' : 'primary.main', flexShrink: 0 }} />
-              <Box sx={{ flexGrow: 1, minWidth: 0 }}>
-                <Typography variant="body2">{n.message}</Typography>
-                <Typography variant="caption" color="text.secondary">{n.createdAt?.replace('T', ' ').slice(0, 19)}</Typography>
-              </Box>
-              {!read && <Button size="small" onClick={async () => { await post(`/notifications/${n.id}/read`); qc.invalidateQueries({ queryKey: ['notifications', wsId] }) }}>已读</Button>}
-            </Box>
-          ))}
-        </Box>
-      </Popover>
-
-      <AssistantPanel wsId={wsId} open={assistantOpen} onClose={() => setAssistantOpen(false)} />
+      <Box component="main" sx={{
+        flexGrow: 1, minWidth: 0, minHeight: 0, overflow: 'hidden',
+        background: 'radial-gradient(900px 420px at 80% -10%, rgba(107,124,255,0.055), transparent 70%), #0b0e14',
+      }}>
+        <Outlet context={ctx} />
+      </Box>
     </Box>
   )
 }

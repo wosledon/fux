@@ -1,5 +1,5 @@
 import { useMemo, useState } from 'react'
-import { useOutletContext } from 'react-router-dom'
+import { useNavigate, useOutletContext } from 'react-router-dom'
 import { useQuery, useQueryClient } from '@tanstack/react-query'
 import { DndContext, DragOverlay, PointerSensor, useSensor, useSensors, useDraggable, useDroppable, type DragEndEvent, type DragOverEvent, type DragStartEvent } from '@dnd-kit/core'
 import { Box, Typography, Chip, Paper, Button, IconButton, Dialog, DialogTitle, DialogContent, DialogActions, TextField, MenuItem, Tooltip, InputAdornment, Divider } from '@mui/material'
@@ -19,7 +19,6 @@ import { get, post, patch, parseJson, type Task, type Lane, type Board, type Pro
 import type { WsCtx } from './WorkspaceLayout'
 import { LANE_ACCENT } from '../theme'
 import { PersonAvatar, useToast } from '../ui'
-import TaskDrawer from './TaskDrawer'
 
 const LANE_HINT: Record<string, { icon: React.ReactNode; text: string }> = {
   planning: { icon: <InboxIcon />, text: '新任务在这里诞生，规划后拖入待办' },
@@ -89,10 +88,11 @@ function TaskCard({ task, agents, teams, onOpen }: { task: Task; agents: Agent[]
   return (
     <Paper ref={setNodeRef} {...listeners} {...attributes} onClick={onOpen}
       sx={{
-        p: 1.5, mb: 1, cursor: 'grab', opacity: isDragging ? 0.35 : 1,
-        border: '1px solid', borderColor: 'divider', borderRadius: 2.5,
-        transition: 'border-color .12s, transform .12s, box-shadow .12s',
-        '&:hover': { borderColor: 'primary.main', transform: 'translateY(-1px)', boxShadow: '0 6px 18px rgba(0,0,0,0.3)' },
+        p: 1.75, mb: 1.25, cursor: 'grab', opacity: isDragging ? 0.35 : 1,
+        bgcolor: '#171c27', border: '1px solid', borderColor: 'rgba(148,163,184,0.12)', borderRadius: 3,
+        transition: 'border-color .15s, transform .15s, box-shadow .15s',
+        '&:hover': { borderColor: 'rgba(139,157,255,0.55)', transform: 'translateY(-2px)', boxShadow: '0 10px 26px rgba(0,0,0,0.2)' },
+        '&:active': { cursor: 'grabbing' },
       }}>
       <CardBody task={task} agents={agents} teams={teams} />
     </Paper>
@@ -109,15 +109,15 @@ function LaneColumn({ lane, tasks, agents, teams, onOpen, onCreate, dropState }:
   const overLimit = lane.wipLimit != null && tasks.length > lane.wipLimit
   return (
     <Box ref={setNodeRef} sx={{
-      width: 300, minWidth: 300, display: 'flex', flexDirection: 'column', height: '100%',
-      bgcolor: 'background.paper', borderRadius: 3, border: '1px solid',
+      width: 312, minWidth: 312, display: 'flex', flexDirection: 'column', height: '100%',
+      bgcolor: 'rgba(18,23,34,0.82)', borderRadius: 4, border: '1px solid',
       borderColor: dropState === 'ok' ? 'success.main' : dropState === 'bad' ? 'error.main' : 'divider',
-      boxShadow: dropState === 'ok' ? '0 0 0 2px rgba(74,222,128,0.25)' : dropState === 'bad' ? '0 0 0 2px rgba(248,113,113,0.2)' : 'none',
-      transition: 'border-color .12s, box-shadow .12s', overflow: 'hidden',
+      boxShadow: dropState === 'ok' ? '0 0 0 2px rgba(94,214,160,0.2)' : dropState === 'bad' ? '0 0 0 2px rgba(251,132,144,0.18)' : 'none',
+      transition: 'border-color .15s, box-shadow .15s', overflow: 'hidden',
     }}>
-      <Box sx={{ height: 3, bgcolor: accent, flexShrink: 0 }} />
-      <Box sx={{ px: 1.5, py: 1.25, display: 'flex', alignItems: 'center', gap: 1, borderBottom: '1px solid', borderColor: 'divider' }}>
-        <Typography fontWeight={700} sx={{ flexGrow: 1 }}>{lane.name}</Typography>
+      <Box sx={{ height: 3, bgcolor: accent, flexShrink: 0, opacity: 0.85 }} />
+      <Box sx={{ px: 1.75, py: 1.5, display: 'flex', alignItems: 'center', gap: 1, borderBottom: '1px solid', borderColor: 'divider' }}>
+        <Typography variant="subtitle2" sx={{ flexGrow: 1 }}>{lane.name}</Typography>
         {lane.stageRole && <Tooltip title={`阶段角色：${lane.stageRole}`}><Chip size="small" label={lane.stageRole} variant="outlined" /></Tooltip>}
         {lane.wipLimit != null && (
           <Tooltip title={`WIP 上限 ${lane.wipLimit}`}><Chip size="small" label={`${tasks.length}/${lane.wipLimit}`} color={overLimit ? 'error' : 'default'} variant="outlined" /></Tooltip>
@@ -142,6 +142,7 @@ function LaneColumn({ lane, tasks, agents, teams, onOpen, onCreate, dropState }:
 
 export default function BoardPage() {
   const { wsId } = useOutletContext<WsCtx>()
+  const nav = useNavigate()
   const qc = useQueryClient()
   const toast = useToast()
   const { data: boardData } = useQuery({ queryKey: ['board', wsId], queryFn: () => get<{ board: Board; lanes: Lane[] }>(`/workspaces/${wsId}/board`) })
@@ -152,7 +153,6 @@ export default function BoardPage() {
   const { data: teams = [] } = useQuery({ queryKey: ['teams', wsId], queryFn: () => get<{ team: Team; members: any[] }[]>(`/workspaces/${wsId}/teams`) })
   const { data: types = [] } = useQuery({ queryKey: ['types', wsId], queryFn: () => get<TaskType[]>(`/workspaces/${wsId}/task-types`) })
 
-  const [openTask, setOpenTask] = useState<string | null>(null)
   const [createOpen, setCreateOpen] = useState(false)
   const [filterProject, setFilterProject] = useState('')
   const [search, setSearch] = useState('')
@@ -203,41 +203,49 @@ export default function BoardPage() {
 
   return (
     <Box sx={{ height: '100%', display: 'flex', flexDirection: 'column' }}>
-      <Box sx={{ px: 2.5, pt: 2, pb: 1.5, display: 'flex', gap: 1.5, alignItems: 'center', flexWrap: 'wrap' }}>
-        <Box sx={{ mr: 1 }}>
-          <Typography variant="h6" fontWeight={800}>工作看板</Typography>
+      <Box sx={{ px: { xs: 2, md: 3.5 }, pt: 3.5, pb: 2.5, flexShrink: 0 }}>
+        <Box sx={{ display: 'flex', alignItems: 'flex-start', gap: 2, mb: 2.5 }}>
+          <Box sx={{ flexGrow: 1 }}>
+            <Typography variant="h5">工作看板</Typography>
+            <Typography variant="body2" color="text.secondary" sx={{ mt: 0.75 }}>跟随任务从规划到交付，让每一步进展都清晰可见</Typography>
+          </Box>
+          <Button variant="contained" startIcon={<AddIcon />} onClick={() => setCreateOpen(true)}>新建任务</Button>
         </Box>
-        <Chip size="small" label={`进行中 ${stats.doing}`} sx={{ bgcolor: 'rgba(109,141,255,0.14)', color: 'primary.light' }} />
-        <Chip size="small" label={`待审核 ${stats.review}`} sx={{ bgcolor: 'rgba(177,151,252,0.14)', color: 'secondary.main' }} />
-        <Chip size="small" label={`阻塞 ${stats.blocked}`} color={stats.blocked > 0 ? 'error' : 'default'} variant={stats.blocked > 0 ? 'filled' : 'outlined'} />
-        <Box sx={{ flexGrow: 1 }} />
-        <TextField select size="small" label="项目" value={filterProject} onChange={e => setFilterProject(e.target.value)} sx={{ width: 170 }}>
-          <MenuItem value="">全部项目</MenuItem>
-          {projects.map(p => <MenuItem key={p.id} value={p.id}>{p.name}</MenuItem>)}
-        </TextField>
-        <TextField size="small" placeholder="搜索任务…" value={search} onChange={e => setSearch(e.target.value)} sx={{ width: 200 }}
-          InputProps={{ startAdornment: <InputAdornment position="start"><SearchIcon fontSize="small" /></InputAdornment> }} />
-        <Button variant="contained" startIcon={<AddIcon />} onClick={() => setCreateOpen(true)}>新建任务</Button>
+        <Paper sx={{ p: 1.25, display: 'flex', gap: 1.5, alignItems: 'center', flexWrap: 'wrap', border: '1px solid', borderColor: 'divider', borderRadius: 3 }}>
+          <Box sx={{ display: 'flex', alignItems: 'center', gap: 2, px: 1 }}>
+            <Typography variant="body2" color="text.secondary">共 <Box component="span" sx={{ color: 'text.primary', fontWeight: 700 }}>{tasks.length}</Box> 项</Typography>
+            <Divider orientation="vertical" flexItem />
+            <Chip size="small" label={`进行中 ${stats.doing}`} sx={{ bgcolor: 'rgba(139,157,255,0.12)', color: 'primary.light' }} />
+            <Chip size="small" label={`待审核 ${stats.review}`} sx={{ bgcolor: 'rgba(184,169,247,0.12)', color: 'secondary.main' }} />
+            <Chip size="small" label={`阻塞 ${stats.blocked}`} color={stats.blocked > 0 ? 'error' : 'default'} variant={stats.blocked > 0 ? 'filled' : 'outlined'} />
+          </Box>
+          <Box sx={{ flexGrow: 1 }} />
+          <TextField select size="small" label="项目" value={filterProject} onChange={e => setFilterProject(e.target.value)} sx={{ width: 160 }}>
+            <MenuItem value="">全部项目</MenuItem>
+            {projects.map(p => <MenuItem key={p.id} value={p.id}>{p.name}</MenuItem>)}
+          </TextField>
+          <TextField size="small" placeholder="搜索任务…" value={search} onChange={e => setSearch(e.target.value)} sx={{ width: 220 }}
+            InputProps={{ startAdornment: <InputAdornment position="start"><SearchIcon fontSize="small" /></InputAdornment> }} />
+        </Paper>
       </Box>
       <DndContext sensors={sensors} onDragStart={onDragStart} onDragOver={onDragOver} onDragEnd={onDragEnd} onDragCancel={() => { setActiveTask(null); setHoverLane(null) }}>
-        <Box sx={{ display: 'flex', gap: 1.5, px: 2.5, pb: 2.5, overflowX: 'auto', flexGrow: 1, minHeight: 0 }}>
+        <Box sx={{ display: 'flex', gap: 2, px: { xs: 2, md: 3.5 }, pb: 3.5, overflowX: 'auto', flexGrow: 1, minHeight: 0 }}>
           {lanes.map(lane => (
             <LaneColumn key={lane.id} lane={lane} agents={agents} teams={teams}
               tasks={filtered.filter(t => t.laneId === lane.id || (!t.laneId && lane.kind === (t.status === 'in_progress' ? 'work' : t.status)))}
-              onOpen={setOpenTask} onCreate={() => setCreateOpen(true)}
+              onOpen={id => nav(`/ws/${wsId}/tasks/${id}`)} onCreate={() => setCreateOpen(true)}
               dropState={hoverLane?.id === lane.id ? (hoverLane.ok ? 'ok' : 'bad') : null} />
           ))}
         </Box>
         <DragOverlay dropAnimation={null}>
           {activeTask && (
-            <Paper sx={{ p: 1.5, width: 284, transform: 'rotate(2deg)', boxShadow: '0 16px 40px rgba(0,0,0,0.5)', border: '1px solid', borderColor: 'primary.main', borderRadius: 2.5, cursor: 'grabbing' }}>
+            <Paper sx={{ p: 1.75, width: 296, transform: 'rotate(1.5deg)', boxShadow: '0 18px 48px rgba(0,0,0,0.45)', border: '1px solid', borderColor: 'primary.main', borderRadius: 3, cursor: 'grabbing' }}>
               <CardBody task={activeTask} agents={agents} teams={teams} />
             </Paper>
           )}
         </DragOverlay>
       </DndContext>
 
-      {openTask && <TaskDrawer taskId={openTask} onClose={() => setOpenTask(null)} />}
       <CreateTaskDialog open={createOpen} onClose={() => setCreateOpen(false)} wsId={wsId} boardId={boardId || ''}
         projects={projects} agents={agents} teams={teams} types={types}
         onCreated={() => { invalidate(); toast('任务已创建（待规划）', 'success') }} />

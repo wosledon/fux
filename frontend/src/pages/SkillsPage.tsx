@@ -18,7 +18,7 @@ export default function SkillsPage() {
   const invalidate = () => qc.invalidateQueries({ queryKey: ['skills', wsId] })
 
   return (
-    <Box sx={{ p: 3, overflowY: 'auto', height: '100%' }}>
+    <Box sx={{ p: { xs: 2, md: 3.5 }, overflowY: 'auto', height: '100%', width: '100%', maxWidth: 1500, mx: 'auto' }}>
       <Box sx={{ display: 'flex', alignItems: 'center', mb: 2 }}>
         <Typography variant="h6" fontWeight={700} sx={{ flexGrow: 1 }}>SKILL 库</Typography>
         {isAdmin && <Button variant="contained" startIcon={<AddIcon />} onClick={() => setEditing('new')}>导入 SKILL</Button>}

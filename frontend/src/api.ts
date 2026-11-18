@@ -72,6 +72,11 @@ export interface Envelope { workspaceId: string; taskId: string; seq: number; ki
 export interface Member { userId: string; username: string; displayName: string; role: string; joinedAt: string }
 export interface Invitation { code: string; workspaceId: string; role: string; expiresAt?: string; oneTime: number; status: string; createdAt: string }
 export interface Approval { id: string; runId: string; taskId: string; request: string; status: string; createdAt: string }
+export interface Notification {
+  id: string; workspaceId: string; kind: string; taskId?: string
+  message: string; readBy: string; createdAt: string
+}
+export interface NotificationItem { notification: Notification; read: boolean }
 
 export const STATUS_LABEL: Record<TaskStatus, string> = {
   planning: '待规划', ready: '待办', in_progress: '进行中', review: '审核中',

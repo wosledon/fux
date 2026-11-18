@@ -16,6 +16,9 @@ import SkillsPage from './pages/SkillsPage'
 import McpPage from './pages/McpPage'
 import MembersPage from './pages/MembersPage'
 import NodesPage from './pages/NodesPage'
+import AssistantPage from './pages/AssistantPage'
+import InboxPage from './pages/InboxPage'
+import TaskPage from './pages/TaskPage'
 
 function RequireAuth({ children }: { children: React.ReactNode }) {
   const { user, loading } = useAuth()
@@ -56,6 +59,9 @@ export default function App() {
       <Route path="/" element={<RequireAuth><WorkspacesPage /></RequireAuth>} />
       <Route path="/ws/:wsId" element={<RequireAuth><WorkspaceLayout /></RequireAuth>}>
         <Route index element={<BoardPage />} />
+        <Route path="assistant" element={<AssistantPage />} />
+        <Route path="inbox" element={<InboxPage />} />
+        <Route path="tasks/:taskId" element={<TaskPage />} />
         <Route path="projects" element={<ProjectsPage />} />
         <Route path="types" element={<TaskTypesPage />} />
         <Route path="agents" element={<AgentsPage />} />

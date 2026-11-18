@@ -11,34 +11,38 @@ export function Logo({ size = 30 }: { size?: number }) {
     <Box sx={{ display: 'flex', alignItems: 'center', gap: 1 }}>
       <Box sx={{
         width: size, height: size, borderRadius: `${size / 3}px`, display: 'grid', placeItems: 'center',
-        background: 'linear-gradient(135deg,#6d8dff 0%,#8b5cf6 100%)',
-        boxShadow: '0 4px 14px rgba(109,141,255,0.35)',
+        background: 'linear-gradient(135deg,#91a2ff 0%,#776de5 100%)',
+        boxShadow: '0 6px 18px rgba(104,121,232,0.2)',
       }}>
         <BoltIcon sx={{ fontSize: size * 0.62, color: '#fff' }} />
       </Box>
-      <Typography sx={{ fontWeight: 800, fontSize: size * 0.62, letterSpacing: '-0.02em' }}>Fux</Typography>
+      <Typography sx={{ fontWeight: 800, fontSize: size * 0.66, letterSpacing: '-0.035em' }}>Fux</Typography>
     </Box>
   )
 }
 
 export function PageHeader({ title, desc, actions }: { title: string; desc?: string; actions?: ReactNode }) {
   return (
-    <Box sx={{ display: 'flex', alignItems: 'flex-start', gap: 2, mb: 3 }}>
+    <Box sx={{ display: 'flex', alignItems: 'flex-start', gap: 2, mb: 3.5 }}>
       <Box sx={{ flexGrow: 1, minWidth: 0 }}>
         <Typography variant="h5">{title}</Typography>
-        {desc && <Typography variant="body2" color="text.secondary" sx={{ mt: 0.5, maxWidth: 760 }}>{desc}</Typography>}
+        {desc && <Typography variant="body2" color="text.secondary" sx={{ mt: 0.75, maxWidth: 760 }}>{desc}</Typography>}
       </Box>
-      {actions && <Box sx={{ display: 'flex', gap: 1, flexShrink: 0, pt: 0.5 }}>{actions}</Box>}
+      {actions && <Box sx={{ display: 'flex', gap: 1, flexShrink: 0, pt: 0.25 }}>{actions}</Box>}
     </Box>
   )
 }
 
 export function EmptyState({ icon, title, desc, action }: { icon?: ReactNode; title: string; desc?: string; action?: ReactNode }) {
   return (
-    <Box sx={{ textAlign: 'center', py: 6, px: 2 }}>
-      <Box sx={{ color: 'text.secondary', opacity: 0.5, mb: 1.5 }}>{icon || <InboxIcon sx={{ fontSize: 44 }} />}</Box>
-      <Typography fontWeight={700}>{title}</Typography>
-      {desc && <Typography variant="body2" color="text.secondary" sx={{ mt: 0.5, mb: 2 }}>{desc}</Typography>}
+    <Box sx={{ textAlign: 'center', py: 7, px: 3 }}>
+      <Box sx={{
+        width: 58, height: 58, borderRadius: 4, display: 'grid', placeItems: 'center', mx: 'auto', mb: 2,
+        color: 'text.secondary', bgcolor: 'rgba(148,163,184,0.06)', border: '1px solid', borderColor: 'divider',
+        '& svg': { fontSize: 28 },
+      }}>{icon || <InboxIcon />}</Box>
+      <Typography variant="subtitle1" fontWeight={700}>{title}</Typography>
+      {desc && <Typography variant="body2" color="text.secondary" sx={{ mt: 0.75, mb: 2.5, maxWidth: 420, mx: 'auto' }}>{desc}</Typography>}
       {action}
     </Box>
   )
