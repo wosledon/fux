@@ -5,11 +5,12 @@ import { DndContext, DragOverlay, PointerSensor, useSensor, useSensors, useDragg
 import { Box, Typography, Chip, Paper, Button, IconButton, Dialog, DialogTitle, DialogContent, DialogActions, TextField, MenuItem, Tooltip, InputAdornment, Divider } from '@mui/material'
 import AddIcon from '@mui/icons-material/Add'
 import SearchIcon from '@mui/icons-material/Search'
-import DragIndicatorIcon from '@mui/icons-material/DragIndicator'
 import FlagIcon from '@mui/icons-material/Flag'
 import MergeIcon from '@mui/icons-material/Merge'
 import ErrorOutlineIcon from '@mui/icons-material/ErrorOutline'
 import SmartToyIcon from '@mui/icons-material/SmartToy'
+import GroupsIcon from '@mui/icons-material/Groups'
+import CategoryIcon from '@mui/icons-material/Category'
 import InboxIcon from '@mui/icons-material/Inbox'
 import RocketLaunchIcon from '@mui/icons-material/RocketLaunch'
 import RateReviewIcon from '@mui/icons-material/RateReview'
@@ -53,8 +54,7 @@ function CardBody({ task, agents, teams }: { task: Task; agents: Agent[]; teams:
   return (
     <>
       <Box sx={{ display: 'flex', gap: 0.5, alignItems: 'flex-start' }}>
-        <DragIndicatorIcon sx={{ fontSize: 16, color: 'text.secondary', opacity: 0.4, mt: 0.25, flexShrink: 0 }} />
-        <Typography variant="body2" fontWeight={600} sx={{ wordBreak: 'break-word', lineHeight: 1.45 }}>{task.title}</Typography>
+        <Typography variant="body2" fontWeight={650} sx={{ wordBreak: 'break-word', lineHeight: 1.5 }}>{task.title}</Typography>
       </Box>
       {(task.priority > 0 || task.prState || task.retryCount > 0 || tags.length > 0) && (
         <Box sx={{ display: 'flex', gap: 0.5, flexWrap: 'wrap', mt: 1, alignItems: 'center' }}>
@@ -67,8 +67,8 @@ function CardBody({ task, agents, teams }: { task: Task; agents: Agent[]; teams:
         </Box>
       )}
       {task.status === 'blocked' && task.blockReason && (
-        <Box sx={{ mt: 1, px: 1, py: 0.5, borderRadius: 1, bgcolor: 'rgba(248,113,113,0.1)', border: '1px solid rgba(248,113,113,0.25)' }}>
-          <Typography variant="caption" sx={{ color: 'error.light', display: 'block', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+        <Box sx={{ mt: 1.25, px: 1.25, py: 0.75, borderRadius: 2, bgcolor: '#fdeef0' }}>
+          <Typography variant="caption" sx={{ color: 'error.main', display: 'block', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
             {task.blockReason}
           </Typography>
         </Box>
@@ -89,9 +89,9 @@ function TaskCard({ task, agents, teams, onOpen }: { task: Task; agents: Agent[]
     <Paper ref={setNodeRef} {...listeners} {...attributes} onClick={onOpen}
       sx={{
         p: 1.75, mb: 1.25, cursor: 'grab', opacity: isDragging ? 0.35 : 1,
-        bgcolor: '#171c27', border: '1px solid', borderColor: 'rgba(148,163,184,0.12)', borderRadius: 3,
-        transition: 'border-color .15s, transform .15s, box-shadow .15s',
-        '&:hover': { borderColor: 'rgba(139,157,255,0.55)', transform: 'translateY(-2px)', boxShadow: '0 10px 26px rgba(0,0,0,0.2)' },
+        bgcolor: '#ffffff', borderRadius: 3, boxShadow: '0 1px 3px rgba(29,36,58,0.07)',
+        transition: 'transform .16s, box-shadow .16s',
+        '&:hover': { transform: 'translateY(-2px)', boxShadow: '0 8px 20px rgba(29,36,58,0.1)' },
         '&:active': { cursor: 'grabbing' },
       }}>
       <CardBody task={task} agents={agents} teams={teams} />
@@ -109,14 +109,13 @@ function LaneColumn({ lane, tasks, agents, teams, onOpen, onCreate, dropState }:
   const overLimit = lane.wipLimit != null && tasks.length > lane.wipLimit
   return (
     <Box ref={setNodeRef} sx={{
-      width: 312, minWidth: 312, display: 'flex', flexDirection: 'column', height: '100%',
-      bgcolor: 'rgba(18,23,34,0.82)', borderRadius: 4, border: '1px solid',
-      borderColor: dropState === 'ok' ? 'success.main' : dropState === 'bad' ? 'error.main' : 'divider',
-      boxShadow: dropState === 'ok' ? '0 0 0 2px rgba(94,214,160,0.2)' : dropState === 'bad' ? '0 0 0 2px rgba(251,132,144,0.18)' : 'none',
-      transition: 'border-color .15s, box-shadow .15s', overflow: 'hidden',
+      width: 304, minWidth: 304, display: 'flex', flexDirection: 'column', height: '100%',
+      bgcolor: '#eef0f5', borderRadius: 4, border: '2px solid',
+      borderColor: dropState === 'ok' ? 'success.main' : dropState === 'bad' ? 'error.main' : 'transparent',
+      transition: 'border-color .15s, background-color .15s', overflow: 'hidden',
     }}>
-      <Box sx={{ height: 3, bgcolor: accent, flexShrink: 0, opacity: 0.85 }} />
-      <Box sx={{ px: 1.75, py: 1.5, display: 'flex', alignItems: 'center', gap: 1, borderBottom: '1px solid', borderColor: 'divider' }}>
+      <Box sx={{ px: 1.75, py: 1.5, display: 'flex', alignItems: 'center', gap: 1 }}>
+        <Box sx={{ width: 8, height: 8, borderRadius: '50%', bgcolor: accent, flexShrink: 0 }} />
         <Typography variant="subtitle2" sx={{ flexGrow: 1 }}>{lane.name}</Typography>
         {lane.stageRole && <Tooltip title={`阶段角色：${lane.stageRole}`}><Chip size="small" label={lane.stageRole} variant="outlined" /></Tooltip>}
         {lane.wipLimit != null && (
@@ -211,13 +210,20 @@ export default function BoardPage() {
           </Box>
           <Button variant="contained" startIcon={<AddIcon />} onClick={() => setCreateOpen(true)}>新建任务</Button>
         </Box>
-        <Paper sx={{ p: 1.25, display: 'flex', gap: 1.5, alignItems: 'center', flexWrap: 'wrap', border: '1px solid', borderColor: 'divider', borderRadius: 3 }}>
-          <Box sx={{ display: 'flex', alignItems: 'center', gap: 2, px: 1 }}>
-            <Typography variant="body2" color="text.secondary">共 <Box component="span" sx={{ color: 'text.primary', fontWeight: 700 }}>{tasks.length}</Box> 项</Typography>
-            <Divider orientation="vertical" flexItem />
-            <Chip size="small" label={`进行中 ${stats.doing}`} sx={{ bgcolor: 'rgba(139,157,255,0.12)', color: 'primary.light' }} />
-            <Chip size="small" label={`待审核 ${stats.review}`} sx={{ bgcolor: 'rgba(184,169,247,0.12)', color: 'secondary.main' }} />
-            <Chip size="small" label={`阻塞 ${stats.blocked}`} color={stats.blocked > 0 ? 'error' : 'default'} variant={stats.blocked > 0 ? 'filled' : 'outlined'} />
+        <Box sx={{ display: 'flex', gap: 1.5, alignItems: 'center', flexWrap: 'wrap' }}>
+          <Box sx={{ display: 'flex', alignItems: 'center', gap: 2.75, px: 0.5 }}>
+            {[
+              { label: '全部任务', value: tasks.length, color: '#697386' },
+              { label: '进行中', value: stats.doing, color: '#635bff' },
+              { label: '待审核', value: stats.review, color: '#875bf7' },
+              { label: '阻塞', value: stats.blocked, color: stats.blocked ? '#d85160' : '#a0a7b5' },
+            ].map(s => (
+              <Box key={s.label} sx={{ display: 'flex', alignItems: 'center', gap: 0.75 }}>
+                <Box sx={{ width: 6, height: 6, borderRadius: '50%', bgcolor: s.color }} />
+                <Typography variant="body2" color="text.secondary">{s.label}</Typography>
+                <Typography variant="body2" fontWeight={750} sx={{ color: s.color }}>{s.value}</Typography>
+              </Box>
+            ))}
           </Box>
           <Box sx={{ flexGrow: 1 }} />
           <TextField select size="small" label="项目" value={filterProject} onChange={e => setFilterProject(e.target.value)} sx={{ width: 160 }}>
@@ -226,7 +232,7 @@ export default function BoardPage() {
           </TextField>
           <TextField size="small" placeholder="搜索任务…" value={search} onChange={e => setSearch(e.target.value)} sx={{ width: 220 }}
             InputProps={{ startAdornment: <InputAdornment position="start"><SearchIcon fontSize="small" /></InputAdornment> }} />
-        </Paper>
+        </Box>
       </Box>
       <DndContext sensors={sensors} onDragStart={onDragStart} onDragOver={onDragOver} onDragEnd={onDragEnd} onDragCancel={() => { setActiveTask(null); setHoverLane(null) }}>
         <Box sx={{ display: 'flex', gap: 2, px: { xs: 2, md: 3.5 }, pb: 3.5, overflowX: 'auto', flexGrow: 1, minHeight: 0 }}>
@@ -239,7 +245,7 @@ export default function BoardPage() {
         </Box>
         <DragOverlay dropAnimation={null}>
           {activeTask && (
-            <Paper sx={{ p: 1.75, width: 296, transform: 'rotate(1.5deg)', boxShadow: '0 18px 48px rgba(0,0,0,0.45)', border: '1px solid', borderColor: 'primary.main', borderRadius: 3, cursor: 'grabbing' }}>
+            <Paper sx={{ p: 1.75, width: 288, transform: 'rotate(1.5deg)', boxShadow: '0 18px 48px rgba(29,36,58,0.22)', borderRadius: 3, cursor: 'grabbing' }}>
               <CardBody task={activeTask} agents={agents} teams={teams} />
             </Paper>
           )}
@@ -302,7 +308,7 @@ function CreateTaskDialog({ open, onClose, wsId, boardId, projects, agents, team
       <DialogContent sx={{ display: 'grid', gap: 2, pt: '12px !important' }}>
         <TextField select label="任务类型（模板）" value={typeId} onChange={e => { setTypeId(e.target.value); setVars({}) }}>
           <MenuItem value="">自由创建</MenuItem>
-          {types.map(t => <MenuItem key={t.id} value={t.id}>{t.icon} {t.name}</MenuItem>)}
+          {types.map(t => <MenuItem key={t.id} value={t.id}><CategoryIcon fontSize="small" sx={{ mr: 1, color: 'text.secondary' }} />{t.name}</MenuItem>)}
         </TextField>
         {type ? (
           <>
@@ -335,8 +341,8 @@ function CreateTaskDialog({ open, onClose, wsId, boardId, projects, agents, team
         </Box>
         <TextField select label="指派（留空自动匹配）" value={assignee} onChange={e => setAssignee(e.target.value)}>
           <MenuItem value="">自动匹配</MenuItem>
-          {agents.map(a => <MenuItem key={a.id} value={`agent:${a.id}`}>🤖 {a.name}</MenuItem>)}
-          {teams.map(t => <MenuItem key={t.team.id} value={`team:${t.team.id}`}>👥 {t.team.name}</MenuItem>)}
+          {agents.map(a => <MenuItem key={a.id} value={`agent:${a.id}`}><SmartToyIcon fontSize="small" sx={{ mr: 1, color: 'text.secondary' }} />{a.name}</MenuItem>)}
+          {teams.map(t => <MenuItem key={t.team.id} value={`team:${t.team.id}`}><GroupsIcon fontSize="small" sx={{ mr: 1, color: 'text.secondary' }} />{t.team.name}</MenuItem>)}
         </TextField>
         {err && <Typography color="error">{err}</Typography>}
       </DialogContent>

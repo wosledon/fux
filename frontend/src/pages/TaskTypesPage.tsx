@@ -27,14 +27,13 @@ export default function TaskTypesPage() {
         模板语法 {'{{变量名}}'}；建卡时填变量一键生成。在看板「新建任务」中选择类型即可快速建卡。
       </Typography>
       <Table size="small">
-        <TableHead><TableRow><TableCell>图标</TableCell><TableCell>名称</TableCell><TableCell>标题模板</TableCell><TableCell>变量</TableCell><TableCell /></TableRow></TableHead>
+        <TableHead><TableRow><TableCell>名称</TableCell><TableCell>标题模板</TableCell><TableCell>变量</TableCell><TableCell /></TableRow></TableHead>
         <TableBody>
           {types.map(t => {
             let vars: string[] = []
             try { vars = (JSON.parse(t.variablesSchema) as any[]).map(v => v.name) } catch { /* ignore */ }
             return (
               <TableRow key={t.id} hover>
-                <TableCell>{t.icon}</TableCell>
                 <TableCell>{t.name}</TableCell>
                 <TableCell><code>{t.titleTemplate}</code></TableCell>
                 <TableCell>{vars.join(', ') || '—'}</TableCell>
@@ -56,7 +55,6 @@ export default function TaskTypesPage() {
 
 function TypeDialog({ t, wsId, onClose, onSaved }: { t: TaskType | null; wsId: string; onClose: () => void; onSaved: () => void }) {
   const [name, setName] = useState(t?.name || '')
-  const [icon, setIcon] = useState(t?.icon || '📋')
   const [titleTemplate, setTitleTemplate] = useState(t?.titleTemplate || '{{title}}')
   const [contentTemplate, setContentTemplate] = useState(t?.contentTemplate || '')
   const [schema, setSchema] = useState(t?.variablesSchema || '[{"name":"title","label":"标题","required":true}]')
@@ -66,7 +64,7 @@ function TypeDialog({ t, wsId, onClose, onSaved }: { t: TaskType | null; wsId: s
   const save = async () => {
     setErr('')
     try {
-      const body = { name, icon, titleTemplate, contentTemplate, variablesSchema: JSON.parse(schema), defaults: JSON.parse(defaults) }
+      const body = { name, icon: t?.icon || '', titleTemplate, contentTemplate, variablesSchema: JSON.parse(schema), defaults: JSON.parse(defaults) }
       if (t) await patch(`/task-types/${t.id}`, body)
       else await post(`/workspaces/${wsId}/task-types`, body)
       onSaved()
@@ -77,10 +75,7 @@ function TypeDialog({ t, wsId, onClose, onSaved }: { t: TaskType | null; wsId: s
     <Dialog open onClose={onClose} fullWidth maxWidth="sm">
       <DialogTitle>{t ? '编辑任务类型' : '新建任务类型'}</DialogTitle>
       <DialogContent sx={{ display: 'grid', gap: 2, pt: '12px !important' }}>
-        <Box sx={{ display: 'flex', gap: 2 }}>
-          <TextField label="图标" value={icon} onChange={e => setIcon(e.target.value)} sx={{ width: 90 }} />
-          <TextField label="名称 *" value={name} onChange={e => setName(e.target.value)} sx={{ flexGrow: 1 }} />
-        </Box>
+        <TextField label="名称 *" value={name} onChange={e => setName(e.target.value)} fullWidth />
         <TextField label="标题模板" value={titleTemplate} onChange={e => setTitleTemplate(e.target.value)} />
         <TextField label="内容（提示词）模板" value={contentTemplate} onChange={e => setContentTemplate(e.target.value)} multiline minRows={5} />
         <TextField label="变量定义（JSON 数组：name/label/required/default）" value={schema} onChange={e => setSchema(e.target.value)} multiline minRows={3} />

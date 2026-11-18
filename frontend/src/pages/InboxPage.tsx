@@ -16,10 +16,10 @@ import { EmptyState, PageHeader, useToast } from '../ui'
 import type { WsCtx } from './WorkspaceLayout'
 
 const KIND_META: Record<string, { label: string; color: string; icon: React.ReactNode }> = {
-  review: { label: '待审核', color: '#b8a9f7', icon: <RateReviewIcon /> },
-  blocked: { label: '任务阻塞', color: '#fb8490', icon: <ErrorOutlineIcon /> },
-  merged: { label: '合并完成', color: '#5ed6a0', icon: <MergeIcon /> },
-  archived: { label: '已归档', color: '#96a0b5', icon: <ArchiveIcon /> },
+  review: { label: '待审核', color: '#875bf7', icon: <RateReviewIcon /> },
+  blocked: { label: '任务阻塞', color: '#d85160', icon: <ErrorOutlineIcon /> },
+  merged: { label: '合并完成', color: '#249d70', icon: <MergeIcon /> },
+  archived: { label: '已归档', color: '#778195', icon: <ArchiveIcon /> },
 }
 
 function formatTime(value: string) {
@@ -71,16 +71,20 @@ export default function InboxPage() {
             <Button variant="outlined" startIcon={<DoneAllIcon />} disabled={!unread || busy} onClick={() => void markAll()}>全部已读</Button>
           </>} />
 
-        <Box sx={{ display: 'flex', alignItems: 'center', mb: 2, gap: 2 }}>
-          <Tabs value={filter} onChange={(_, v) => setFilter(v)} sx={{ minHeight: 40 }}>
-            <Tab value="all" label={`全部消息 ${items.length}`} sx={{ minHeight: 40, py: 0 }} />
-            <Tab value="unread" label={`未读 ${unread}`} sx={{ minHeight: 40, py: 0 }} />
+        <Box sx={{ display: 'flex', alignItems: 'center', mb: 2.5, gap: 2 }}>
+          <Tabs value={filter} onChange={(_, v) => setFilter(v)} sx={{
+            minHeight: 42, p: 0.5, bgcolor: '#e9ecf3', borderRadius: 3,
+            '& .MuiTabs-indicator': { height: '100%', borderRadius: 2.5, bgcolor: '#ffffff', boxShadow: '0 1px 4px rgba(29,36,58,0.1)' },
+            '& .MuiTab-root': { zIndex: 1 },
+          }}>
+            <Tab value="all" label={`全部消息 ${items.length}`} disableRipple sx={{ minHeight: 34, py: 0, px: 2, '&.Mui-selected': { color: 'text.primary' } }} />
+            <Tab value="unread" label={`未读 ${unread}`} disableRipple sx={{ minHeight: 34, py: 0, px: 2, '&.Mui-selected': { color: 'text.primary' } }} />
           </Tabs>
           <Box sx={{ flexGrow: 1 }} />
           {unread > 0 && <Chip size="small" color="primary" label={`${unread} 条待处理`} />}
         </Box>
 
-        <Paper sx={{ border: '1px solid', borderColor: 'divider', borderRadius: 4, overflow: 'hidden' }}>
+        <Paper sx={{ borderRadius: 2.5, overflow: 'hidden', boxShadow: '0 1px 4px rgba(29,36,58,0.05)' }}>
           {isLoading ? (
             <Box sx={{ py: 8, display: 'grid', placeItems: 'center' }}><InboxIcon color="disabled" sx={{ fontSize: 36 }} /></Box>
           ) : filtered.length === 0 ? (
@@ -88,21 +92,21 @@ export default function InboxPage() {
               desc={filter === 'unread' ? '所有消息都已处理，可以切换到全部消息查看历史。' : '任务需要审核、发生阻塞或完成交付时，消息会出现在这里。'} />
           ) : filtered.map((item, index) => {
             const n = item.notification
-            const meta = KIND_META[n.kind] || { label: '任务动态', color: '#8b9dff', icon: <NotificationsNoneIcon /> }
+            const meta = KIND_META[n.kind] || { label: '任务动态', color: '#635bff', icon: <NotificationsNoneIcon /> }
             return (
               <Box key={n.id} onClick={() => n.taskId && void openItem(item)}
                 onKeyDown={e => { if (n.taskId && (e.key === 'Enter' || e.key === ' ')) { e.preventDefault(); void openItem(item) } }}
                 role={n.taskId ? 'button' : undefined} tabIndex={n.taskId ? 0 : undefined}
                 sx={{
                   display: 'flex', alignItems: 'flex-start', gap: 1.75, p: 2.25, position: 'relative',
-                  cursor: n.taskId ? 'pointer' : 'default', bgcolor: item.read ? 'transparent' : 'rgba(139,157,255,0.045)',
+                  cursor: n.taskId ? 'pointer' : 'default', bgcolor: item.read ? 'transparent' : '#f6f4ff',
                   borderBottom: index < filtered.length - 1 ? '1px solid' : 0, borderColor: 'divider',
                   transition: 'background-color .15s', '&:hover': { bgcolor: n.taskId ? 'action.hover' : undefined },
                   '&:focus-visible': { outline: '2px solid', outlineColor: 'primary.main', outlineOffset: -2 },
                 }}>
                 <Box sx={{ position: 'relative', flexShrink: 0 }}>
                   <Box sx={{ width: 40, height: 40, borderRadius: 2.5, display: 'grid', placeItems: 'center', bgcolor: `${meta.color}14`, color: meta.color, '& svg': { fontSize: 21 } }}>{meta.icon}</Box>
-                  {!item.read && <Box sx={{ position: 'absolute', width: 8, height: 8, borderRadius: '50%', bgcolor: 'primary.main', top: -2, right: -2, boxShadow: '0 0 0 3px #121722' }} />}
+                  {!item.read && <Box sx={{ position: 'absolute', width: 8, height: 8, borderRadius: '50%', bgcolor: 'primary.main', top: -2, right: -2, boxShadow: '0 0 0 3px #ffffff' }} />}
                 </Box>
                 <Box sx={{ flexGrow: 1, minWidth: 0, pt: 0.25 }}>
                   <Box sx={{ display: 'flex', alignItems: 'center', gap: 1, mb: 0.75 }}>

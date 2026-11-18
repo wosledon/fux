@@ -74,11 +74,11 @@ export default function WorkspacesPage() {
           <Grid container spacing={2.5}>
             {data.map(({ workspace: w, role }) => (
               <Grid key={w.id} size={{ xs: 12, sm: 6, md: 4 }}>
-                <Card sx={{ transition: 'transform .15s, box-shadow .15s, border-color .15s', '&:hover': { transform: 'translateY(-3px)', borderColor: 'primary.main', boxShadow: '0 10px 30px rgba(0,0,0,0.35)' } }}>
+                <Card sx={{ transition: 'transform .15s, box-shadow .15s', '&:hover': { transform: 'translateY(-3px)', boxShadow: '0 12px 30px rgba(29,36,58,0.1)' } }}>
                   <CardActionArea onClick={() => nav(`/ws/${w.id}`)} sx={{ p: 0.5 }}>
                     <CardContent>
                       <Box sx={{ display: 'flex', alignItems: 'center', gap: 1, mb: 1.5 }}>
-                        <Box sx={{ width: 34, height: 34, borderRadius: 2, display: 'grid', placeItems: 'center', fontWeight: 800, bgcolor: 'rgba(109,141,255,0.14)', color: 'primary.light' }}>
+                        <Box sx={{ width: 34, height: 34, borderRadius: 2.5, display: 'grid', placeItems: 'center', fontWeight: 800, bgcolor: '#eceaff', color: 'primary.main' }}>
                           {w.name.slice(0, 1)}
                         </Box>
                         <Typography variant="h6" sx={{ flexGrow: 1, minWidth: 0, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{w.name}</Typography>

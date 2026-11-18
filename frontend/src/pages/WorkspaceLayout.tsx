@@ -90,20 +90,19 @@ export default function WorkspaceLayout() {
   return (
     <Box sx={{ display: 'flex', height: '100%', bgcolor: 'background.default' }}>
       <Box component="aside" sx={{
-        width: 240, flexShrink: 0, display: 'flex', flexDirection: 'column',
-        bgcolor: '#0f131b', borderRight: '1px solid', borderColor: 'divider',
+        width: 236, flexShrink: 0, display: 'flex', flexDirection: 'column',
+        bgcolor: '#fcfcfe', borderRight: '1px solid', borderColor: 'divider',
       }}>
         <Box sx={{ px: 3, py: 3 }}><Logo size={30} /></Box>
         <Box sx={{ px: 2, pb: 2.5 }}>
           <ButtonBase onClick={() => nav('/')} sx={{
             width: '100%', p: 1.25, borderRadius: 3, textAlign: 'left', gap: 1.25,
-            border: '1px solid', borderColor: 'divider', bgcolor: 'rgba(255,255,255,0.025)',
-            transition: 'background-color .15s, border-color .15s',
-            '&:hover': { bgcolor: 'action.hover', borderColor: 'rgba(139,157,255,0.3)' },
+            bgcolor: '#f1f2f7', transition: 'background-color .15s, transform .15s',
+            '&:hover': { bgcolor: '#ebecf3', transform: 'translateY(-1px)' },
           }}>
             <Box sx={{
-              width: 34, height: 34, borderRadius: 2, display: 'grid', placeItems: 'center', flexShrink: 0,
-              color: 'primary.light', bgcolor: 'rgba(139,157,255,0.12)', fontWeight: 800,
+              width: 34, height: 34, borderRadius: 2.5, display: 'grid', placeItems: 'center', flexShrink: 0,
+              color: '#5b50d6', bgcolor: '#e5e3ff', fontWeight: 800,
             }}>{ctx.workspace.name.slice(0, 1)}</Box>
             <Box sx={{ flexGrow: 1, minWidth: 0 }}>
               <Typography variant="body2" fontWeight={700} noWrap>{ctx.workspace.name}</Typography>
@@ -116,20 +115,19 @@ export default function WorkspaceLayout() {
         <Box component="nav" sx={{ overflowY: 'auto', flexGrow: 1, py: 1.5 }}>
           {NAV_GROUPS.map(g => (
             <Box key={g.label} sx={{ mb: 1.25 }}>
-              <Typography variant="caption" sx={{ px: 3, py: 0.75, display: 'block', color: '#69748a', fontSize: 11, fontWeight: 700, letterSpacing: '0.1em' }}>
+              <Typography variant="caption" sx={{ px: 3, py: 0.75, display: 'block', color: '#a0a7b5', fontSize: 11, fontWeight: 700, letterSpacing: '0.08em' }}>
                 {g.label}
               </Typography>
               <List dense disablePadding>
                 {g.items.map(n => (
                   <ListItemButton key={n.to} component={NavLink} to={`/ws/${wsId}${n.to ? '/' + n.to : ''}`} end={n.to === ''}
                     sx={{
-                      color: 'text.secondary', minHeight: 40,
-                      '& .MuiListItemIcon-root': { color: '#768197', transition: 'color .15s' },
+                      color: '#697386', minHeight: 40,
+                      '& .MuiListItemIcon-root': { color: '#8c96a8', transition: 'color .15s' },
                       '&:hover': { color: 'text.primary', '& .MuiListItemIcon-root': { color: 'text.primary' } },
                       '&.active': {
-                        bgcolor: 'rgba(139,157,255,0.12)', color: 'primary.light',
-                        '& .MuiListItemIcon-root': { color: 'primary.light' },
-                        '&::before': { content: '""', position: 'absolute', left: 0, top: 10, bottom: 10, width: 3, borderRadius: 2, bgcolor: 'primary.main' },
+                        bgcolor: '#eceaff', color: '#5549cf',
+                        '& .MuiListItemIcon-root': { color: '#635bff' },
                       },
                     }}>
                     <ListItemIcon sx={{ minWidth: 34, '& svg': { fontSize: 20 } }}>{n.icon}</ListItemIcon>
@@ -154,8 +152,7 @@ export default function WorkspaceLayout() {
       </Box>
 
       <Box component="main" sx={{
-        flexGrow: 1, minWidth: 0, minHeight: 0, overflow: 'hidden',
-        background: 'radial-gradient(900px 420px at 80% -10%, rgba(107,124,255,0.055), transparent 70%), #0b0e14',
+        flexGrow: 1, minWidth: 0, minHeight: 0, overflow: 'hidden', bgcolor: 'background.default',
       }}>
         <Outlet context={ctx} />
       </Box>

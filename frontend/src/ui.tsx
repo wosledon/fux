@@ -38,7 +38,7 @@ export function EmptyState({ icon, title, desc, action }: { icon?: ReactNode; ti
     <Box sx={{ textAlign: 'center', py: 7, px: 3 }}>
       <Box sx={{
         width: 58, height: 58, borderRadius: 4, display: 'grid', placeItems: 'center', mx: 'auto', mb: 2,
-        color: 'text.secondary', bgcolor: 'rgba(148,163,184,0.06)', border: '1px solid', borderColor: 'divider',
+        color: 'text.secondary', bgcolor: '#eef0f6', border: 'none',
         '& svg': { fontSize: 28 },
       }}>{icon || <InboxIcon />}</Box>
       <Typography variant="subtitle1" fontWeight={700}>{title}</Typography>
@@ -55,17 +55,17 @@ export function PersonAvatar({ name, size = 26 }: { name?: string; size?: number
   for (const c of n) h = (h * 31 + c.charCodeAt(0)) % 997
   const hue = HUES[h % HUES.length]
   return (
-    <MuiAvatar sx={{ width: size, height: size, fontSize: size * 0.42, fontWeight: 700, bgcolor: `hsl(${hue} 55% 42%)` }}>
+    <MuiAvatar sx={{ width: size, height: size, fontSize: size * 0.42, fontWeight: 750, bgcolor: `hsl(${hue} 68% 91%)`, color: `hsl(${hue} 44% 38%)` }}>
       {n.slice(0, 1).toUpperCase()}
     </MuiAvatar>
   )
 }
 
 export function StatusChip({ status }: { status: TaskStatus }) {
-  const c = STATUS_ACCENT[status] || '#8b93a7'
+  const c = STATUS_ACCENT[status] || '#718096'
   return (
     <Chip size="small" label={STATUS_LABEL[status] || status}
-      sx={{ bgcolor: `${c}22`, color: c, border: `1px solid ${c}55`, fontWeight: 700 }} />
+      sx={{ bgcolor: `${c}12`, color: c, border: 'none', fontWeight: 700, px: 0.5 }} />
   )
 }
 

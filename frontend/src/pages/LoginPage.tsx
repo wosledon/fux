@@ -39,7 +39,7 @@ export default function LoginPage() {
     <Box sx={{ height: '100%', display: 'flex' }}>
       <Box sx={{
         flex: 1, display: { xs: 'none', md: 'flex' }, flexDirection: 'column', justifyContent: 'center', px: 8,
-        background: 'radial-gradient(1200px 600px at 20% 10%, rgba(109,141,255,0.16), transparent), radial-gradient(900px 500px at 80% 90%, rgba(139,92,246,0.14), transparent), #0a0d13',
+        background: 'radial-gradient(900px 540px at 20% 10%, rgba(99,91,255,0.13), transparent), radial-gradient(700px 480px at 80% 90%, rgba(135,91,247,0.09), transparent), #f8f8fc',
         borderRight: '1px solid', borderColor: 'divider',
       }}>
         <Logo size={40} />
@@ -52,7 +52,7 @@ export default function LoginPage() {
         <Stack spacing={2.5}>
           {FEATURES.map(f => (
             <Box key={f.t} sx={{ display: 'flex', gap: 2, alignItems: 'flex-start' }}>
-              <Box sx={{ width: 38, height: 38, borderRadius: 2.5, display: 'grid', placeItems: 'center', bgcolor: 'rgba(109,141,255,0.12)', color: 'primary.light', flexShrink: 0 }}>
+              <Box sx={{ width: 38, height: 38, borderRadius: 2.5, display: 'grid', placeItems: 'center', bgcolor: '#eceaff', color: 'primary.main', flexShrink: 0 }}>
                 {f.icon}
               </Box>
               <Box>

@@ -60,7 +60,7 @@ export default function AssistantPage() {
             } else if (ev.type === 'error') {
               setMsgs(m => {
                 const copy = [...m]
-                copy[copy.length - 1] = { role: 'assistant', content: `⚠️ ${ev.message}` }
+                copy[copy.length - 1] = { role: 'assistant', content: `错误：${ev.message}` }
                 return copy
               })
             }
@@ -71,7 +71,7 @@ export default function AssistantPage() {
     } catch (e: any) {
       setMsgs(m => {
         const copy = [...m]
-        copy[copy.length - 1] = { role: 'assistant', content: `⚠️ ${e.message}` }
+        copy[copy.length - 1] = { role: 'assistant', content: `错误：${e.message}` }
         return copy
       })
     } finally {
@@ -85,11 +85,11 @@ export default function AssistantPage() {
       <Box sx={{ width: '100%', maxWidth: 1040, display: 'flex', flexDirection: 'column', minHeight: 0 }}>
         <PageHeader title="AI 助理" desc="用自然语言查询看板、创建和更新任务。助理通过工作区内置 MCP 安全地完成操作。"
           actions={msgs.length > 0 ? <Button variant="outlined" startIcon={<RestartAltIcon />} disabled={busy} onClick={() => setMsgs([])}>新对话</Button> : undefined} />
-        <Paper sx={{ flexGrow: 1, minHeight: 0, display: 'flex', flexDirection: 'column', border: '1px solid', borderColor: 'divider', borderRadius: 4, overflow: 'hidden' }}>
+        <Paper sx={{ flexGrow: 1, minHeight: 0, display: 'flex', flexDirection: 'column', borderRadius: 2.5, overflow: 'hidden', boxShadow: '0 2px 12px rgba(29,36,58,0.055)' }}>
           <Box sx={{ flexGrow: 1, overflowY: 'auto', p: { xs: 2, md: 4 } }}>
             {msgs.length === 0 ? (
               <Box sx={{ minHeight: '100%', display: 'grid', placeContent: 'center', justifyItems: 'center', textAlign: 'center', py: 4 }}>
-                <Box sx={{ width: 64, height: 64, borderRadius: 5, display: 'grid', placeItems: 'center', mb: 2.5, bgcolor: 'rgba(139,157,255,0.12)', color: 'primary.light', border: '1px solid rgba(139,157,255,0.2)' }}>
+                <Box sx={{ width: 64, height: 64, borderRadius: 4, display: 'grid', placeItems: 'center', mb: 2.5, bgcolor: '#eceaff', color: 'primary.main' }}>
                   <AutoAwesomeIcon sx={{ fontSize: 30 }} />
                 </Box>
                 <Typography variant="h6">今天想推进什么？</Typography>
@@ -103,14 +103,14 @@ export default function AssistantPage() {
                 {msgs.map((m, i) => (
                   <Box key={i} sx={{ display: 'flex', gap: 1.5, alignItems: 'flex-start', flexDirection: m.role === 'user' ? 'row-reverse' : 'row' }}>
                     {m.role === 'assistant'
-                      ? <Box sx={{ width: 34, height: 34, borderRadius: 2.5, bgcolor: 'rgba(139,157,255,0.12)', color: 'primary.light', display: 'grid', placeItems: 'center', flexShrink: 0 }}><SmartToyIcon sx={{ fontSize: 19 }} /></Box>
+                      ? <Box sx={{ width: 34, height: 34, borderRadius: 2.5, bgcolor: '#eceaff', color: 'primary.main', display: 'grid', placeItems: 'center', flexShrink: 0 }}><SmartToyIcon sx={{ fontSize: 19 }} /></Box>
                       : <PersonAvatar name={user?.displayName || user?.username} size={34} />}
                     <Box sx={{ maxWidth: '82%', minWidth: 0 }}>
                       <Typography variant="caption" color="text.secondary" display="block" sx={{ mb: 0.75, textAlign: m.role === 'user' ? 'right' : 'left' }}>{m.role === 'user' ? '你' : 'Fux 助理'}</Typography>
                       <Paper sx={{
                         p: 1.75, px: 2, borderRadius: 3, whiteSpace: 'pre-wrap', wordBreak: 'break-word',
-                        bgcolor: m.role === 'user' ? 'rgba(139,157,255,0.14)' : 'rgba(148,163,184,0.055)',
-                        border: '1px solid', borderColor: m.role === 'user' ? 'rgba(139,157,255,0.22)' : 'divider',
+                        bgcolor: m.role === 'user' ? 'primary.main' : '#f1f2f6',
+                        color: m.role === 'user' ? '#ffffff' : 'text.primary',
                       }}>
                         <Typography variant="body2">{m.content || (busy && i === msgs.length - 1 ? <Box component="span" sx={{ display: 'inline-flex', alignItems: 'center', gap: 1 }}><CircularProgress size={14} />正在思考…</Box> : '')}</Typography>
                       </Paper>
@@ -121,7 +121,7 @@ export default function AssistantPage() {
             )}
             <div ref={bottomRef} />
           </Box>
-          <Box sx={{ p: 2, borderTop: '1px solid', borderColor: 'divider', bgcolor: 'rgba(255,255,255,0.015)' }}>
+          <Box sx={{ p: 2, borderTop: '1px solid', borderColor: 'divider', bgcolor: '#ffffff' }}>
             <Box sx={{ display: 'flex', gap: 1.25, alignItems: 'flex-end' }}>
               <TextField fullWidth multiline maxRows={5} placeholder="给 AI 助理发送消息…" value={input} onChange={e => setInput(e.target.value)}
                 onKeyDown={e => { if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); void send() } }} disabled={busy} />
