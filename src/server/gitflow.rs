@@ -1,0 +1,240 @@
+//! git 交付流：任务隔离 worktree、完成→push→PR/MR（git 原生）、合并检测、团队交接。
+use crate::git;
+use crate::runner::RunOutcome;
+use crate::server::api::{projects, teams, workspaces};
+use crate::server::domain::{self, MoveOpts};
+use crate::server::error::ApiResult;
+use crate::server::events;
+use crate::server::models::{Project, Run, Task};
+use crate::server::SharedState;
+use serde_json::json;
+use std::path::PathBuf;
+
+/// 为任务准备隔离工作区（本地执行）。
+pub async fn prepare_workspace(state: &SharedState, task: &Task, project: Option<&Project>) -> ApiResult<PathBuf> {
+    let wt = git::worktree_dir(&state.data_dir, &task.id);
+    let branch = task.branch.clone().unwrap_or_else(|| format!("fux/task-{}", &task.id[..8]));
+    match project {
+        Some(p) if p.kind == "git" => {
+            let repo = git::checkout_dir(&state.data_dir, &p.id);
+            git::ensure_clone(p.remote_url.as_deref().unwrap_or(""), &repo).await?;
+            git::prepare_worktree(&repo, &wt, &branch, &p.default_branch).await?;
+        }
+        Some(p) => {
+            let lp = std::path::Path::new(p.local_path.as_deref().unwrap_or(""));
+            if git::is_repo(lp).await {
+                git::prepare_worktree(lp, &wt, &branch, &p.default_branch).await?;
+            } else if !wt.exists() {
+                git::copy_dir_recursive(lp, &wt)?;
+                git::init_repo(&wt).await?;
+                git::commit_all(&wt, "fux: baseline").await.ok();
+            }
+        }
+        None => {
+            tokio::fs::create_dir_all(&wt).await?;
+            if !git::is_repo(&wt).await {
+                git::init_repo(&wt).await?;
+            }
+        }
+    }
+    Ok(wt)
+}
+
+pub struct Completion {
+    pub pushed: bool,
+    pub head: Option<String>,
+    pub pr_url: Option<String>,
+    pub pr_state: String,
+}
+
+/// 本地完成：commit + push + 推导 PR/MR 创建链接。
+pub async fn complete_local(_state: &SharedState, task: &Task, project: Option<&Project>, workdir: &std::path::Path) -> anyhow::Result<Completion> {
+    let branch = task.branch.clone().unwrap_or_else(|| format!("fux/task-{}", &task.id[..8]));
+    let head = git::commit_all(workdir, &format!("fux(task): {}", task.title)).await?;
+    let base = project.map(|p| p.default_branch.clone()).unwrap_or_else(|| "main".into());
+    let mut remote = project.and_then(|p| p.remote_url.clone()).filter(|r| !r.is_empty());
+    if remote.is_none() && git::has_remote(workdir).await {
+        remote = git::git(workdir, &["remote", "get-url", "origin"]).await.ok();
+    }
+    match remote {
+        Some(r) => {
+            git::push(workdir, &branch).await?;
+            Ok(Completion {
+                pushed: true,
+                head,
+                pr_url: git::pr_create_url(&r, &branch, &base),
+                pr_state: "open".into(),
+            })
+        }
+        None => {
+            // 无 remote：本地合并模式（唯一例外，批准需 admin 人工确认）
+            Ok(Completion { pushed: false, head, pr_url: None, pr_state: "local".into() })
+        }
+    }
+}
+
+/// Run 结束后的统一处置（本地与远程共用）。
+pub async fn finish_run(state: &SharedState, run_id: &str, outcome: RunOutcome, remote: Option<(bool, Option<String>)>) {
+    if let Err(e) = finish_inner(state, run_id, outcome, remote).await {
+        tracing::error!("finish_run {run_id}: {e:#}");
+    }
+}
+
+async fn finish_inner(state: &SharedState, run_id: &str, outcome: RunOutcome, remote: Option<(bool, Option<String>)>) -> ApiResult<()> {
+    let run = sqlx::query_as::<_, Run>("SELECT * FROM runs WHERE id = ?").bind(run_id).fetch_one(&state.db).await?;
+    let task = domain::load_task(state, &run.task_id).await?;
+    sqlx::query("UPDATE runs SET status = ?, stop_reason = ?, turn_count = ?, acp_session_id = ?, ended_at = ? WHERE id = ?")
+        .bind(&outcome.status).bind(&outcome.stop_reason).bind(outcome.turn_count as i64)
+        .bind(&outcome.session_id).bind(crate::now()).bind(run_id)
+        .execute(&state.db).await?;
+
+    // 守卫：任务已被质量阀/租约回收处置时不再重复转移
+    if task.status != "in_progress" || task.lease_run_id.as_deref() != Some(run_id) {
+        return Ok(());
+    }
+    let actor = format!("agent:{}", run.agent_id);
+    let project = match &task.project_id {
+        Some(pid) => projects::load_project(state, pid).await.ok(),
+        None => None,
+    };
+
+    match outcome.status.as_str() {
+        "finished" => {
+            // 团队流水线：阶段交接（T11）
+            if let Some(team_id) = &run.team_id {
+                if let Ok(team) = sqlx::query_as::<_, crate::server::models::Team>("SELECT * FROM agent_teams WHERE id = ?").bind(team_id).fetch_one(&state.db).await {
+                    if team.mode == "pipeline" {
+                        let members = teams::team_members(state, team_id).await?;
+                        let next_stage = run.stage + 1;
+                        if (next_stage as usize) < members.len() {
+                            let summary = run_summary(state, run_id).await;
+                            events::append(&state.db, &state.broadcast, &task.id, "team.handoff", &actor, Some(run_id),
+                                json!({ "fromStage": run.stage, "toStage": next_stage, "summary": summary })).await?;
+                            let next = &members[next_stage as usize];
+                            let new_run = crate::new_id();
+                            sqlx::query("INSERT INTO runs (id, task_id, agent_id, team_id, node_id, stage, retry_of) VALUES (?,?,?,?,?,?,?)")
+                                .bind(&new_run).bind(&task.id).bind(&next.agent_id).bind(team_id).bind(&run.node_id).bind(next_stage).bind(run_id)
+                                .execute(&state.db).await?;
+                            sqlx::query("UPDATE tasks SET lease_run_id = ?, lease_expires_at = ? WHERE id = ?")
+                                .bind(&new_run).bind(lease_deadline()).bind(&task.id).execute(&state.db).await?;
+                            crate::server::scheduler::dispatch(state, &new_run, Some(summary)).await;
+                            return Ok(());
+                        }
+                    }
+                }
+            }
+            // 完成交付：commit/push/PR
+            let completion = match remote {
+                Some((pushed, head)) => Completion {
+                    pushed,
+                    head,
+                    pr_url: project.as_ref().and_then(|p| p.remote_url.as_deref())
+                        .and_then(|r| git::pr_create_url(r, task.branch.as_deref().unwrap_or(""), &project.as_ref().map(|p| p.default_branch.clone()).unwrap_or_else(|| "main".into()))),
+                    pr_state: if pushed { "open".into() } else { "local".into() },
+                },
+                None => {
+                    let wt = git::worktree_dir(&state.data_dir, &task.id);
+                    match complete_local(state, &task, project.as_ref(), &wt).await {
+                        Ok(c) => c,
+                        Err(e) => {
+                            domain::move_task(state, &task.id, "blocked", &actor, MoveOpts {
+                                reason: Some(format!("交付失败（git push/认证？）: {e:#}")), ..Default::default()
+                            }).await?;
+                            workspaces::notify(state, &task.workspace_id, "blocked", Some(&task.id), &format!("任务「{}」交付失败被阻塞", task.title)).await;
+                            return Ok(());
+                        }
+                    }
+                }
+            };
+            sqlx::query("UPDATE tasks SET pr_url = COALESCE(?, pr_url), pr_state = ?, merge_commit = NULL WHERE id = ?")
+                .bind(&completion.pr_url).bind(&completion.pr_state).bind(&task.id).execute(&state.db).await?;
+            events::append(&state.db, &state.broadcast, &task.id, "pr.linked", &actor, Some(run_id),
+                json!({ "prUrl": completion.pr_url, "prState": completion.pr_state, "branch": task.branch, "pushed": completion.pushed })).await?;
+            domain::move_task(state, &task.id, "review", &actor, MoveOpts::default()).await?;
+            workspaces::notify(state, &task.workspace_id, "review", Some(&task.id), &format!("任务「{}」已完成，等待审核（PR/MR）", task.title)).await;
+        }
+        "cancelled" => {
+            domain::move_task(state, &task.id, "blocked", &actor, MoveOpts {
+                reason: Some("运行被取消".into()), ..Default::default()
+            }).await?;
+        }
+        _ => {
+            // 突然中断：自动重试 ≤ 2 次（新会话 + 摘要上下文）
+            if outcome.stop_reason == "interrupted" && run.retry_count < 2 {
+                let summary = run_summary(state, run_id).await;
+                events::append(&state.db, &state.broadcast, &task.id, "watchdog.interrupted", "system", Some(run_id),
+                    json!({ "error": outcome.error, "retry": run.retry_count + 1 })).await?;
+                let new_run = crate::new_id();
+                sqlx::query("INSERT INTO runs (id, task_id, agent_id, team_id, node_id, stage, retry_count, retry_of) VALUES (?,?,?,?,?,?,?,?)")
+                    .bind(&new_run).bind(&task.id).bind(&run.agent_id).bind(&run.team_id).bind(&run.node_id)
+                    .bind(run.stage).bind(run.retry_count + 1).bind(run_id)
+                    .execute(&state.db).await?;
+                sqlx::query("UPDATE tasks SET lease_run_id = ?, lease_expires_at = ? WHERE id = ?")
+                    .bind(&new_run).bind(lease_deadline()).bind(&task.id).execute(&state.db).await?;
+                crate::server::scheduler::dispatch(state, &new_run, Some(summary)).await;
+            } else {
+                domain::move_task(state, &task.id, "blocked", &actor, MoveOpts {
+                    reason: Some(format!("运行失败: {}", outcome.error.clone().unwrap_or_else(|| outcome.stop_reason.clone()))), ..Default::default()
+                }).await?;
+                workspaces::notify(state, &task.workspace_id, "blocked", Some(&task.id), &format!("任务「{}」运行失败被阻塞", task.title)).await;
+            }
+        }
+    }
+    Ok(())
+}
+
+pub fn lease_deadline() -> String {
+    (chrono::Utc::now() + chrono::Duration::seconds(30)).format("%Y-%m-%dT%H:%M:%S%.3fZ").to_string()
+}
+
+/// 取某 Run 的 agent 输出摘要（用于重试/交接上下文）。
+pub async fn run_summary(state: &SharedState, run_id: &str) -> String {
+    let rows = sqlx::query_as::<_, crate::server::models::TaskEvent>(
+        "SELECT * FROM task_events WHERE run_id = ? AND kind = 'agent.message' ORDER BY seq DESC LIMIT 40",
+    ).bind(run_id).fetch_all(&state.db).await.unwrap_or_default();
+    let mut text = String::new();
+    for r in rows.iter().rev() {
+        if let Ok(v) = serde_json::from_str::<serde_json::Value>(&r.payload) {
+            if let Some(t) = v.get("text").and_then(|t| t.as_str()) { text.push_str(t); }
+        }
+    }
+    if text.len() > 2000 { text = text[text.len() - 2000..].to_string(); }
+    text
+}
+
+/// 单任务合并检测（API 手动触发）。
+pub async fn check_merge_now(state: &SharedState, task: &Task) -> anyhow::Result<bool> {
+    if task.pr_state.as_deref() == Some("merged") { return Ok(true); }
+    let pid = match &task.project_id { Some(p) => p.clone(), None => return Ok(false) };
+    let project = projects::load_project(state, &pid).await?;
+    let remote = match &project.remote_url { Some(r) if !r.is_empty() => r.clone(), _ => return Ok(false) };
+    let branch = match &task.branch { Some(b) => b.clone(), None => return Ok(false) };
+    let mirror = state.data_dir.join("mirrors").join(&pid);
+    git::ensure_clone(&remote, &mirror).await?;
+    if git::is_merged(&mirror, &branch, &project.default_branch).await? {
+        let head = git::git(&mirror, &["rev-parse", &branch]).await.ok();
+        sqlx::query("UPDATE tasks SET pr_state = 'merged', merge_commit = ? WHERE id = ?")
+            .bind(&head).bind(&task.id).execute(&state.db).await?;
+        events::append(&state.db, &state.broadcast, &task.id, "pr.merged_detected", "system", None,
+            json!({ "mergeCommit": head })).await?;
+        workspaces::notify(state, &task.workspace_id, "merged", Some(&task.id), &format!("任务「{}」的 PR/MR 已检测到合并，可批准", task.title)).await;
+        return Ok(true);
+    }
+    Ok(false)
+}
+
+/// 周期合并检测（review 中的任务）。
+pub fn spawn_merge_checker(state: SharedState) {
+    tokio::spawn(async move {
+        loop {
+            tokio::time::sleep(std::time::Duration::from_secs(30)).await;
+            let tasks = sqlx::query_as::<_, Task>("SELECT * FROM tasks WHERE status = 'review' AND pr_state = 'open'")
+                .fetch_all(&state.db).await.unwrap_or_default();
+            for t in tasks {
+                if let Err(e) = check_merge_now(&state, &t).await {
+                    tracing::debug!("merge check {}: {e}", t.id);
+                }
+            }
+        }
+    });
+}

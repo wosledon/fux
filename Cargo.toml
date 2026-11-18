@@ -2,5 +2,58 @@
 name = "fux"
 version = "0.1.0"
 edition = "2024"
+autobins = false
+
+# 单 package 多二进制（辅助二进制源码在 src/cmd/，显式声明，避免 src/bin 约定被误判）：
+#   fux             控制面
+#   fux-runtime     节点执行器（安装即注册）
+#   fux-mock-agent  演示/测试用 ACP mock
+#   fux-mcp         内置 workspace MCP Server
+
+[[bin]]
+name = "fux"
+path = "src/main.rs"
+
+[[bin]]
+name = "fux-runtime"
+path = "src/cmd/fux-runtime.rs"
+
+[[bin]]
+name = "fux-mock-agent"
+path = "src/cmd/fux-mock-agent.rs"
+
+[[bin]]
+name = "fux-mcp"
+path = "src/cmd/fux-mcp.rs"
 
 [dependencies]
+actix-web = "4"
+actix-ws = "0.3"
+actix-cors = "0.7"
+sqlx = { version = "0.8", features = ["runtime-tokio", "tls-rustls-ring", "sqlite", "migrate", "chrono", "json"] }
+tokio = { version = "1", features = ["full"] }
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+anyhow = "1"
+thiserror = "2"
+uuid = { version = "1", features = ["v4", "serde"] }
+chrono = { version = "0.4", features = ["serde"] }
+futures-util = "0.3"
+async-stream = "0.3"
+async-trait = "0.1"
+tokio-stream = "0.1"
+tracing = "0.1"
+tracing-subscriber = { version = "0.3", features = ["env-filter"] }
+argon2 = "0.5"
+jsonwebtoken = "9"
+rand = "0.8"
+hex = "0.4"
+aes-gcm = "0.10"
+which = "7"
+clap = { version = "4", features = ["derive"] }
+tokio-tungstenite = "0.26"
+reqwest = { version = "0.12", default-features = false, features = ["json", "rustls-tls"] }
+
+[dev-dependencies]
+tempfile = "3"
+actix-http = "3"
