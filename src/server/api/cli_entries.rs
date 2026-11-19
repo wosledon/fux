@@ -1,22 +1,35 @@
-use crate::server::auth::{require, AuthUser};
+use crate::acp::AcpClient;
+use crate::server::SharedState;
+use crate::server::auth::{AuthUser, require};
 use crate::server::error::{ApiError, ApiResult};
 use crate::server::models::CliEntry;
-use crate::server::SharedState;
-use actix_web::{web, HttpResponse};
+use actix_web::{HttpResponse, web};
 use serde::Deserialize;
 use serde_json::json;
 
 #[derive(Deserialize)]
 #[serde(rename_all = "camelCase")]
-struct EntryQuery { workspace_id: Option<String> }
+struct EntryQuery {
+    workspace_id: Option<String>,
+}
 
-async fn list(state: SharedState, user: AuthUser, query: web::Query<EntryQuery>) -> ApiResult<HttpResponse> {
+async fn list(
+    state: SharedState,
+    user: AuthUser,
+    query: web::Query<EntryQuery>,
+) -> ApiResult<HttpResponse> {
     let rows = match &query.workspace_id {
         Some(ws) => {
             require(&state.db, ws, &user.id, "member").await?;
             sqlx::query_as::<_, CliEntry>("SELECT * FROM cli_entries WHERE workspace_id IS NULL OR workspace_id = ? ORDER BY is_default DESC, name").bind(ws).fetch_all(&state.db).await?
         }
-        None => sqlx::query_as::<_, CliEntry>("SELECT * FROM cli_entries WHERE workspace_id IS NULL ORDER BY name").fetch_all(&state.db).await?,
+        None => {
+            sqlx::query_as::<_, CliEntry>(
+                "SELECT * FROM cli_entries WHERE workspace_id IS NULL ORDER BY name",
+            )
+            .fetch_all(&state.db)
+            .await?
+        }
     };
     Ok(HttpResponse::Ok().json(rows))
 }
@@ -31,7 +44,11 @@ struct EntryReq {
     env_template: Option<serde_json::Value>,
 }
 
-async fn create(state: SharedState, user: AuthUser, body: web::Json<EntryReq>) -> ApiResult<HttpResponse> {
+async fn create(
+    state: SharedState,
+    user: AuthUser,
+    body: web::Json<EntryReq>,
+) -> ApiResult<HttpResponse> {
     require(&state.db, &body.workspace_id, &user.id, "admin").await?;
     let id = crate::new_id();
     sqlx::query("INSERT INTO cli_entries (id, workspace_id, name, kind, command, args, env_template, is_default) VALUES (?,?,?,?,?,?,?,0)")
@@ -39,34 +56,138 @@ async fn create(state: SharedState, user: AuthUser, body: web::Json<EntryReq>) -
         .bind(serde_json::to_string(&body.args.clone().unwrap_or_default()).unwrap())
         .bind(body.env_template.clone().unwrap_or(json!({})).to_string())
         .execute(&state.db).await?;
-    let e = sqlx::query_as::<_, CliEntry>("SELECT * FROM cli_entries WHERE id = ?").bind(&id).fetch_one(&state.db).await?;
+    let e = sqlx::query_as::<_, CliEntry>("SELECT * FROM cli_entries WHERE id = ?")
+        .bind(&id)
+        .fetch_one(&state.db)
+        .await?;
     Ok(HttpResponse::Ok().json(e))
 }
 
 /// 探测 CLI 是否安装（节点上线前 probe）。
-async fn probe(state: SharedState, user: AuthUser, path: web::Path<String>) -> ApiResult<HttpResponse> {
+async fn probe(
+    state: SharedState,
+    user: AuthUser,
+    path: web::Path<String>,
+) -> ApiResult<HttpResponse> {
     let id = path.into_inner();
-    let e = sqlx::query_as::<_, CliEntry>("SELECT * FROM cli_entries WHERE id = ?").bind(&id).fetch_one(&state.db).await?;
-    if let Some(ws) = &e.workspace_id { require(&state.db, ws, &user.id, "member").await?; }
+    let e = sqlx::query_as::<_, CliEntry>("SELECT * FROM cli_entries WHERE id = ?")
+        .bind(&id)
+        .fetch_one(&state.db)
+        .await?;
+    if let Some(ws) = &e.workspace_id {
+        require(&state.db, ws, &user.id, "member").await?;
+    }
     let _ = user;
     match which::which(&e.command) {
-        Ok(p) => Ok(HttpResponse::Ok().json(json!({ "available": true, "path": p.to_string_lossy() }))),
+        Ok(p) => {
+            Ok(HttpResponse::Ok().json(json!({ "available": true, "path": p.to_string_lossy() })))
+        }
         Err(_) => Ok(HttpResponse::Ok().json(json!({ "available": false }))),
     }
 }
 
-async fn delete(state: SharedState, user: AuthUser, path: web::Path<String>) -> ApiResult<HttpResponse> {
+async fn delete(
+    state: SharedState,
+    user: AuthUser,
+    path: web::Path<String>,
+) -> ApiResult<HttpResponse> {
     let id = path.into_inner();
-    let e = sqlx::query_as::<_, CliEntry>("SELECT * FROM cli_entries WHERE id = ?").bind(&id).fetch_one(&state.db).await?;
-    if e.is_default == 1 { return Err(ApiError::forbidden("默认条目不可删除")); }
-    if let Some(ws) = &e.workspace_id { require(&state.db, ws, &user.id, "admin").await?; }
-    sqlx::query("DELETE FROM cli_entries WHERE id = ?").bind(&id).execute(&state.db).await?;
+    let e = sqlx::query_as::<_, CliEntry>("SELECT * FROM cli_entries WHERE id = ?")
+        .bind(&id)
+        .fetch_one(&state.db)
+        .await?;
+    if e.is_default == 1 {
+        return Err(ApiError::forbidden("默认条目不可删除"));
+    }
+    if let Some(ws) = &e.workspace_id {
+        require(&state.db, ws, &user.id, "admin").await?;
+    }
+    sqlx::query("DELETE FROM cli_entries WHERE id = ?")
+        .bind(&id)
+        .execute(&state.db)
+        .await?;
     Ok(HttpResponse::Ok().json(json!({ "ok": true })))
+}
+
+/// 通过 ACP 建立一次临时会话，读取 CLI 声明的模型 / 推理强度目录。
+async fn probe_models(
+    command: &str,
+    args: &[String],
+    env: &[(String, String)],
+    cwd: &std::path::Path,
+) -> anyhow::Result<serde_json::Value> {
+    let mut client = AcpClient::spawn(command, args, env, cwd).await?;
+    let mut updates = client.take_updates();
+    client.initialize().await?;
+    let mut session = client.new_session_full(cwd, vec![]).await?;
+    // 部分 agent 在 session/new 之后才用 config_option_update 下发完整配置项
+    let deadline = tokio::time::Instant::now() + std::time::Duration::from_millis(1200);
+    loop {
+        match tokio::time::timeout_at(deadline, updates.recv()).await {
+            Ok(Some(u)) => {
+                if u.pointer("/update/sessionUpdate").and_then(|v| v.as_str())
+                    == Some("config_option_update")
+                {
+                    crate::acp::merge_config_options(&mut session, &u);
+                }
+            }
+            _ => break,
+        }
+    }
+    let catalog = crate::acp::session_catalog(&session);
+    client.kill().await;
+    Ok(catalog)
+}
+
+/// 探测 CLI 的 ACP 模型目录（供智能体编辑时下拉选择）。
+async fn models(
+    state: SharedState,
+    user: AuthUser,
+    path: web::Path<String>,
+) -> ApiResult<HttpResponse> {
+    let id = path.into_inner();
+    let e = sqlx::query_as::<_, CliEntry>("SELECT * FROM cli_entries WHERE id = ?")
+        .bind(&id)
+        .fetch_one(&state.db)
+        .await?;
+    if let Some(ws) = &e.workspace_id {
+        require(&state.db, ws, &user.id, "member").await?;
+    }
+    let args: Vec<String> = serde_json::from_str(&e.args).unwrap_or_default();
+    let mut env: Vec<(String, String)> =
+        serde_json::from_str::<serde_json::Map<String, serde_json::Value>>(&e.env_template)
+            .map(|m| {
+                m.into_iter()
+                    .map(|(k, v)| (k, v.as_str().unwrap_or("").to_string()))
+                    .collect()
+            })
+            .unwrap_or_default();
+    crate::acp::tweak_env(&e.kind, &mut env);
+    let cwd = std::env::temp_dir().join(format!("fux-models-{}", crate::new_id()));
+    tokio::fs::create_dir_all(&cwd).await.ok();
+    let result = tokio::time::timeout(
+        std::time::Duration::from_secs(75),
+        probe_models(&e.command, &args, &env, &cwd),
+    )
+    .await;
+    let _ = tokio::fs::remove_dir_all(&cwd).await;
+    match result {
+        Ok(Ok(catalog)) => {
+            Ok(HttpResponse::Ok().json(json!({ "available": true, "catalog": catalog })))
+        }
+        Ok(Err(err)) => {
+            Ok(HttpResponse::Ok().json(json!({ "available": false, "error": format!("{err:#}") })))
+        }
+        Err(_) => {
+            Ok(HttpResponse::Ok().json(json!({ "available": false, "error": "探测超时（75s）" })))
+        }
+    }
 }
 
 pub fn routes(cfg: &mut web::ServiceConfig) {
     cfg.route("/cli-entries", web::get().to(list))
         .route("/cli-entries", web::post().to(create))
         .route("/cli-entries/{id}/probe", web::post().to(probe))
+        .route("/cli-entries/{id}/models", web::post().to(models))
         .route("/cli-entries/{id}", web::delete().to(delete));
 }

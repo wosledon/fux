@@ -1,6 +1,6 @@
 use crate::server::auth::{require, AuthUser};
 use crate::server::error::{ApiError, ApiResult};
-use crate::server::models::Agent;
+use crate::server::models::{Agent, Skill};
 use crate::server::SharedState;
 use actix_web::{web, HttpResponse};
 use serde::Deserialize;
@@ -8,6 +8,61 @@ use serde_json::{json, Value};
 
 pub async fn load_agent(state: &SharedState, id: &str) -> ApiResult<Agent> {
     Ok(sqlx::query_as::<_, Agent>("SELECT * FROM agents WHERE id = ?").bind(id).fetch_one(&state.db).await?)
+}
+
+/// 读取智能体授权的 SKILL（运行时写入工作目录并在提示词中引用）。
+pub async fn skills_for_agent(state: &SharedState, agent_id: &str) -> ApiResult<Vec<Skill>> {
+    Ok(sqlx::query_as::<_, Skill>(
+        "SELECT s.* FROM skills s JOIN agent_skills a ON a.skill_id = s.id WHERE a.agent_id = ?",
+    )
+    .bind(agent_id)
+    .fetch_all(&state.db)
+    .await?)
+}
+
+/// 组装智能体授权的 MCP server 配置（密钥解密后注入 env/headers）。
+pub async fn mcp_configs(state: &SharedState, agent_id: &str) -> ApiResult<Vec<Value>> {
+    let grants = sqlx::query_as::<_, (String, String)>(
+        "SELECT mcp_server_id, tool_whitelist FROM agent_mcp_servers WHERE agent_id = ?",
+    )
+    .bind(agent_id)
+    .fetch_all(&state.db)
+    .await?;
+    let mut out = vec![];
+    for (mid, _wl) in grants {
+        if let Ok(m) = sqlx::query_as::<_, crate::server::models::McpServer>(
+            "SELECT * FROM mcp_servers WHERE id = ?",
+        )
+        .bind(&mid)
+        .fetch_one(&state.db)
+        .await
+        {
+            let env = crate::server::api::mcp::env_plain(&m);
+            let args: Vec<String> = serde_json::from_str(&m.args).unwrap_or_default();
+            if m.transport == "stdio" {
+                let env_arr: Vec<Value> = env
+                    .as_object()
+                    .map(|o| {
+                        o.iter()
+                            .map(|(k, v)| json!({ "name": k, "value": v.as_str().unwrap_or("") }))
+                            .collect()
+                    })
+                    .unwrap_or_default();
+                out.push(json!({ "name": m.name, "command": m.command, "args": args, "env": env_arr }));
+            } else {
+                let headers: Vec<Value> = env
+                    .as_object()
+                    .map(|o| {
+                        o.iter()
+                            .map(|(k, v)| json!({ "name": k, "value": v.as_str().unwrap_or("") }))
+                            .collect()
+                    })
+                    .unwrap_or_default();
+                out.push(json!({ "type": m.transport, "name": m.name, "url": m.url, "headers": headers }));
+            }
+        }
+    }
+    Ok(out)
 }
 
 async fn agent_json(state: &SharedState, a: &Agent) -> ApiResult<Value> {

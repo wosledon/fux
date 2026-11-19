@@ -1,15 +1,201 @@
 //! AI 工作助理（FR-03）：多会话对话，绑定 CLI 的智能体 + 内置 workspace MCP，SSE 流式回复。
 use crate::acp::AcpClient;
 use crate::server::SharedState;
+use crate::server::api::agents;
 use crate::server::auth::{AuthUser, issue_token, require};
 use crate::server::error::{ApiError, ApiResult};
 use crate::server::models::{Agent, CliEntry, Workspace};
 use actix_web::{HttpResponse, web};
 use serde::Deserialize;
 use serde_json::{Value, json};
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, HashMap};
 use std::sync::Arc;
-use tokio::sync::{Mutex, mpsc};
+use std::time::{Duration, Instant};
+use tokio::sync::{Mutex, broadcast, mpsc};
+
+impl Default for AssistantPool {
+    fn default() -> Self {
+        Self {
+            conns: Mutex::new(HashMap::new()),
+        }
+    }
+}
+
+/// 助理常驻 ACP 连接池：同一工作区会话复用进程与 ACP session，避免每条消息都冷启动。
+pub struct AssistantPool {
+    conns: Mutex<HashMap<String, Arc<AssistantConn>>>,
+}
+
+struct AssistantConn {
+    /// 智能体 / CLI / 模型 / 授权配置指纹；变化时重建连接
+    fingerprint: String,
+    client: Arc<AcpClient>,
+    acp_session_id: String,
+    /// 把 session/update 广播给当前请求（同一时刻只允许一个 prompt）
+    updates: broadcast::Sender<Value>,
+    last_used: std::sync::Mutex<Instant>,
+    prompt_lock: Mutex<()>,
+}
+
+impl AssistantPool {
+    async fn get(&self, key: &str, fingerprint: &str) -> Option<Arc<AssistantConn>> {
+        let map = self.conns.lock().await;
+        map.get(key)
+            .filter(|c| c.fingerprint == fingerprint && !c.client.is_closed())
+            .cloned()
+    }
+
+    async fn put(&self, key: String, conn: Arc<AssistantConn>) {
+        let old = self.conns.lock().await.insert(key, conn);
+        if let Some(old) = old {
+            old.client.kill().await;
+        }
+    }
+
+    async fn remove(&self, key: &str) {
+        let old = self.conns.lock().await.remove(key);
+        if let Some(old) = old {
+            old.client.kill().await;
+        }
+    }
+
+    /// 回收长时间未使用的连接，释放 CLI 进程。
+    async fn evict_idle(&self, max_idle: Duration) {
+        let mut map = self.conns.lock().await;
+        let now = Instant::now();
+        let stale: Vec<String> = map
+            .iter()
+            .filter(|(_, c)| {
+                now.duration_since(*c.last_used.lock().unwrap_or_else(|e| e.into_inner()))
+                    > max_idle
+            })
+            .map(|(k, _)| k.clone())
+            .collect();
+        let conns: Vec<_> = stale.iter().filter_map(|k| map.remove(k)).collect();
+        drop(map);
+        for c in conns {
+            c.client.kill().await;
+        }
+    }
+}
+
+/// 后台回收空闲助理连接（10 分钟）。
+pub fn spawn_reaper(state: SharedState) {
+    tokio::spawn(async move {
+        loop {
+            tokio::time::sleep(Duration::from_secs(60)).await;
+            state
+                .assistant_pool
+                .evict_idle(Duration::from_secs(600))
+                .await;
+        }
+    });
+}
+
+fn conn_fingerprint(
+    agent: &Agent,
+    cli: &CliEntry,
+    model: &str,
+    effort: &str,
+    skills: &[crate::server::models::Skill],
+    mcp: &[Value],
+) -> String {
+    let skill_ids: Vec<&str> = skills.iter().map(|s| s.id.as_str()).collect();
+    format!(
+        "{}|{}|{}|{}|{}|{}|{}|{}|{}",
+        agent.id,
+        agent.system_prompt,
+        cli.id,
+        cli.args,
+        cli.env_template,
+        model,
+        effort,
+        skill_ids.join(","),
+        mcp.len()
+    )
+}
+
+/// 建立一条常驻助理连接：启动 CLI、初始化、创建 ACP session，并挂上事件泵。
+async fn create_conn(
+    tx: &mpsc::UnboundedSender<String>,
+    cli: &CliEntry,
+    args: &[String],
+    env: &[(String, String)],
+    cwd: &std::path::Path,
+    mcp: Vec<Value>,
+    model: &str,
+    effort: &str,
+    fingerprint: String,
+) -> anyhow::Result<Arc<AssistantConn>> {
+    let mut client = AcpClient::spawn(&cli.command, args, env, cwd).await?;
+    let mut updates = client.take_updates();
+    let mut requests = client.take_requests();
+    sse_status(tx, &format!("已启动 {}，正在初始化 ACP…", cli.name));
+    client.initialize().await?;
+    sse_status(tx, "正在创建会话…");
+    let session = client.new_session_full(cwd, mcp).await?;
+    let acp_session_id = session
+        .get("sessionId")
+        .and_then(|s| s.as_str())
+        .map(|s| s.to_string())
+        .ok_or_else(|| anyhow::anyhow!("session/new 未返回 sessionId"))?;
+    crate::acp::apply_model_effort(&client, &session, &acp_session_id, model, effort, &cli.kind)
+        .await;
+    sse_status(tx, "会话已创建，正在等待模型响应…");
+
+    let client = Arc::new(client);
+    let (updates_tx, _) = broadcast::channel(1024);
+    let btx = updates_tx.clone();
+    tokio::spawn(async move {
+        while let Some(u) = updates.recv().await {
+            let _ = btx.send(u);
+        }
+    });
+
+    let req_client = Arc::downgrade(&client);
+    tokio::spawn(async move {
+        while let Some(req) = requests.recv().await {
+            // 弱引用：连接被回收时请求泵自然结束，不阻止 AcpClient Drop 杀掉子进程
+            let Some(req_client) = req_client.upgrade() else {
+                break;
+            };
+            if req.method == "session/request_permission" {
+                let opt = req
+                    .params
+                    .get("options")
+                    .and_then(|o| o.as_array())
+                    .and_then(|arr| arr.first())
+                    .and_then(|o| o.get("optionId"))
+                    .and_then(|v| v.as_str())
+                    .unwrap_or("");
+                let _ = req_client
+                    .respond(
+                        req.id,
+                        json!({ "outcome": { "outcome": "selected", "optionId": opt } }),
+                    )
+                    .await;
+            } else {
+                let _ = req_client.respond(req.id, json!({})).await;
+            }
+        }
+    });
+
+    // Copilot 模型经 /model 命令设置（每个 ACP 会话一次）
+    if cli.kind == "copilot" && !model.is_empty() {
+        let _ = client
+            .prompt(&acp_session_id, &format!("/model {model}"))
+            .await;
+    }
+
+    Ok(Arc::new(AssistantConn {
+        fingerprint,
+        client,
+        acp_session_id,
+        updates: updates_tx,
+        last_used: std::sync::Mutex::new(Instant::now()),
+        prompt_lock: Mutex::new(()),
+    }))
+}
 
 /// 旧版本没有会话概念的消息统一归入一个「历史对话」。
 async fn backfill_legacy(state: &SharedState, ws_id: &str) -> ApiResult<()> {
@@ -170,6 +356,14 @@ fn session_title(message: &str) -> String {
         t.push('…');
     }
     if t.is_empty() { "新对话".into() } else { t }
+}
+
+/// 向 SSE 客户端发送一条进度状态（只用于展示，不写入历史）。
+fn sse_status(tx: &mpsc::UnboundedSender<String>, text: &str) {
+    let _ = tx.send(format!(
+        "data: {}\n\n",
+        json!({ "type": "status", "text": text })
+    ));
 }
 
 /// 工作区上下文：统计 + 重点任务 + 项目/智能体，供助理回答与调用 MCP 时参考。
@@ -343,12 +537,19 @@ async fn chat(
         .await?;
 
     let context = build_context(&state, &ws).await;
+    let skills = agents::skills_for_agent(&state, &agent.id).await?;
     let mut prompt = format!(
         "你是 Fux 工作区助理，用简体中文回答，尽量简洁并使用 Markdown。\n\
          你可以通过 fux-workspace MCP 管理任务、项目、工作流、SKILL、智能体、任务类型、MCP、CLI 与成员；需要各类 ID 时先调用 workspace_overview，查看任务运行与节点状态用 get_task。\n\
          执行写操作前先说明将要做什么；删除、覆盖、发起工作流、邀请成员等影响较大的操作必须先征得用户确认。所有操作以当前用户身份执行，并受工作区权限与任务状态机约束。\n\n\
          ## 工作区上下文\n{context}\n"
     );
+    if !skills.is_empty() {
+        prompt.push_str("\n可用 SKILL（位于 .fux/skills/，按需阅读）:\n");
+        for s in &skills {
+            prompt.push_str(&format!("- {}\n", s.name));
+        }
+    }
     for (role, content) in history.iter().rev() {
         prompt.push_str(&format!("{role}: {content}\n"));
     }
@@ -360,8 +561,18 @@ async fn chat(
         .join(&ws_id)
         .join(&session_id);
     tokio::fs::create_dir_all(&cwd).await.ok();
+    for s in &skills {
+        let dir = cwd.join(".fux").join("skills").join(&s.name);
+        tokio::fs::create_dir_all(&dir).await.ok();
+        tokio::fs::write(dir.join("SKILL.md"), &s.content)
+            .await
+            .ok();
+    }
+    let model = agent.model.clone();
+    let effort = agent.reasoning_effort.clone();
+    let cli_name = cli.name.clone();
 
-    let mut mcp = vec![];
+    let mut mcp = agents::mcp_configs(&state, &agent.id).await?;
     if which::which("fux-mcp").is_ok() {
         let token = issue_token(&state.jwt_secret, &user.id, &user.username)?;
         mcp.push(json!({
@@ -381,7 +592,7 @@ async fn chat(
             crate::runner::map_effort(&agent.reasoning_effort)
         ));
     }
-    let env: Vec<(String, String)> =
+    let mut env: Vec<(String, String)> =
         serde_json::from_str::<serde_json::Map<String, Value>>(&cli.env_template)
             .map(|m| {
                 m.into_iter()
@@ -389,6 +600,7 @@ async fn chat(
                     .collect()
             })
             .unwrap_or_default();
+    crate::acp::tweak_env(&cli.kind, &mut env);
     let full_prompt = if agent.system_prompt.is_empty() {
         prompt
     } else {
@@ -404,57 +616,103 @@ async fn chat(
     let db = state.db.clone();
     let sid2 = session_id.clone();
     let ws_id2 = ws_id.clone();
+    let state2 = state.clone();
+    let fingerprint = conn_fingerprint(&agent, &cli, &model, &effort, &skills, &mcp);
+    let pool_key = format!("{ws_id}:{session_id}");
+    let short_prompt = message.clone();
     tokio::spawn(async move {
         let answer = Arc::new(Mutex::new(String::new()));
-        let result: anyhow::Result<()> = async {
-            let mut client = AcpClient::spawn(&cli.command, &args, &env, &cwd).await?;
-            let mut updates = client.take_updates();
-            let mut requests = client.take_requests();
-            client.initialize().await?;
-            let acp_sid = client.new_session(&cwd, mcp).await?;
-            let client = Arc::new(client);
-            let pump = {
-                let client = client.clone();
-                tokio::spawn(async move {
-                    loop {
-                        tokio::select! {
-                            Some(req) = requests.recv() => {
-                                if req.method == "session/request_permission" {
-                                    let opt = req.params.get("options").and_then(|o| o.as_array())
-                                        .and_then(|arr| arr.first())
-                                        .and_then(|o| o.get("optionId")).and_then(|v| v.as_str()).unwrap_or("");
-                                    let _ = client.respond(req.id, json!({ "outcome": { "outcome": "selected", "optionId": opt } })).await;
-                                } else {
-                                    let _ = client.respond(req.id, json!({})).await;
-                                }
-                            }
-                            else => break,
-                        }
-                    }
-                })
-            };
-            let handle_chunk = |u: &Value, tx: &mpsc::UnboundedSender<String>, answer: &Arc<Mutex<String>>| {
-                if u.pointer("/update/sessionUpdate").and_then(|k| k.as_str()) == Some("agent_message_chunk") {
+        let handle_update =
+            |u: &Value, tx: &mpsc::UnboundedSender<String>, answer: &Arc<Mutex<String>>| match u
+                .pointer("/update/sessionUpdate")
+                .and_then(|k| k.as_str())
+                .unwrap_or("")
+            {
+                "agent_message_chunk" => {
                     if let Some(text) = u.pointer("/update/content/text").and_then(|t| t.as_str()) {
                         let text = text.to_string();
-                        if let Ok(mut guard) = answer.try_lock() { guard.push_str(&text); }
-                        let _ = tx.send(format!("data: {}\n\n", json!({ "type": "chunk", "text": text })));
+                        if let Ok(mut guard) = answer.try_lock() {
+                            guard.push_str(&text);
+                        }
+                        let _ = tx.send(format!(
+                            "data: {}\n\n",
+                            json!({ "type": "chunk", "text": text })
+                        ));
                     }
                 }
+                "tool_call" => {
+                    let title = u
+                        .pointer("/update/title")
+                        .and_then(|t| t.as_str())
+                        .unwrap_or("工具");
+                    sse_status(tx, &format!("正在调用工具：{title}"));
+                }
+                "tool_call_update" => {
+                    if u.pointer("/update/status").and_then(|s| s.as_str()) == Some("completed") {
+                        let title = u
+                            .pointer("/update/title")
+                            .and_then(|t| t.as_str())
+                            .unwrap_or("工具");
+                        sse_status(tx, &format!("工具完成：{title}"));
+                    }
+                }
+                "plan" => sse_status(tx, "已更新执行计划"),
+                _ => {}
             };
+        let result: anyhow::Result<()> = async {
+            let (conn, is_new) = match state2.assistant_pool.get(&pool_key, &fingerprint).await {
+                Some(c) => (c, false),
+                None => {
+                    let c = create_conn(
+                        &tx, &cli, &args, &env, &cwd, mcp, &model, &effort, fingerprint.clone(),
+                    )
+                    .await?;
+                    state2.assistant_pool.put(pool_key.clone(), c.clone()).await;
+                    (c, true)
+                }
+            };
+            let _guard = conn.prompt_lock.lock().await;
+            let mut sub = conn.updates.subscribe();
+            if !is_new {
+                sse_status(&tx, "复用已有会话，正在等待模型响应…");
+            }
+            let prompt_text: &str = if is_new { &full_prompt } else { &short_prompt };
             let resp = {
-                let fut = client.prompt(&acp_sid, &full_prompt);
+                let fut = conn.client.prompt(&conn.acp_session_id, prompt_text);
                 tokio::pin!(fut);
+                let mut waited = 0u64;
+                let mut tick = tokio::time::interval_at(
+                    tokio::time::Instant::now() + std::time::Duration::from_secs(10),
+                    std::time::Duration::from_secs(10),
+                );
                 loop {
                     tokio::select! {
                         r = &mut fut => break r,
-                        Some(u) = updates.recv() => handle_chunk(&u, &tx, &answer),
+                        recv = sub.recv() => match recv {
+                            Ok(u) => {
+                                if u.get("sessionId").and_then(|v| v.as_str()) == Some(conn.acp_session_id.as_str()) {
+                                    handle_update(&u, &tx, &answer);
+                                }
+                            }
+                            Err(broadcast::error::RecvError::Lagged(_)) => {}
+                            Err(broadcast::error::RecvError::Closed) => {}
+                        },
+                        _ = tick.tick() => {
+                            waited += 10;
+                            sse_status(&tx, &format!("等待 {cli_name} 响应（已 {waited}s）…"));
+                        }
                     }
                 }
             };
-            while let Ok(u) = updates.try_recv() { handle_chunk(&u, &tx, &answer); }
-            client.kill().await;
-            pump.abort();
+            while let Ok(u) = sub.try_recv() {
+                if u.get("sessionId").and_then(|v| v.as_str()) == Some(conn.acp_session_id.as_str()) {
+                    handle_update(&u, &tx, &answer);
+                }
+            }
+            *conn.last_used.lock().unwrap_or_else(|e| e.into_inner()) = Instant::now();
+            if resp.is_err() && conn.client.is_closed() {
+                state2.assistant_pool.remove(&pool_key).await;
+            }
             resp?;
             Ok(())
         }.await;

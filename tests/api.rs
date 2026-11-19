@@ -20,6 +20,7 @@ async fn setup() -> Ctx {
         broadcast,
         nodes: NodeRegistry::default(),
         local_runs: Mutex::new(std::collections::HashMap::new()),
+        assistant_pool: Default::default(),
         api_base: "http://127.0.0.1:8080".into(),
     });
     Ctx { state, _dir: dir }
@@ -977,6 +978,28 @@ async fn assistant_sessions_and_chat() {
         .expect("缺少 sessionId")
         .to_string();
 
+    // 同一会话第二条消息应复用常驻 ACP 连接，而不是重新冷启动
+    let (s, body2) = call_text(
+        &app,
+        auth(
+            test::TestRequest::post()
+                .uri("/api/v1/assistant/chat")
+                .set_json(json!({ "workspaceId": ws, "message": "第二个问题", "sessionId": sid })),
+            &owner,
+        ),
+    )
+    .await;
+    assert_eq!(s, 200, "second chat: {body2}");
+    assert!(
+        body2.contains("\"type\":\"chunk\""),
+        "复用会话应有流式分片: {body2}"
+    );
+    assert!(body2.contains("复用已有会话"), "应复用连接: {body2}");
+    assert!(
+        !body2.contains("正在创建会话"),
+        "不应重新创建 ACP 会话: {body2}"
+    );
+
     // 会话列表与消息
     let (s, v) = call(
         &app,
@@ -1035,4 +1058,40 @@ async fn assistant_sessions_and_chat() {
     )
     .await;
     assert_eq!(v.as_array().unwrap().len(), 0);
+}
+
+#[actix_web::test]
+async fn cli_models_probe_reads_acp_config_options() {
+    let ctx = setup().await;
+    let app = app!(ctx);
+    let owner = register(&app, "models1").await;
+    let (ws, _) = create_ws(&app, &owner).await;
+    let mock_bin = env!("CARGO_BIN_EXE_fux-mock-agent");
+    let (_, cli) = call(
+        &app,
+        auth(
+            test::TestRequest::post()
+                .uri("/api/v1/cli-entries")
+                .set_json(json!({ "workspaceId": ws, "name": "MockModels", "command": mock_bin, "args": [] })),
+            &owner,
+        ),
+    )
+    .await;
+    let cli_id = cli["id"].as_str().unwrap().to_string();
+
+    let (s, v) = call(
+        &app,
+        auth(
+            test::TestRequest::post().uri(&format!("/api/v1/cli-entries/{cli_id}/models")),
+            &owner,
+        ),
+    )
+    .await;
+    assert_eq!(s, 200, "models: {v}");
+    assert_eq!(v["available"], true, "mock CLI 应可探测: {v}");
+    let models = v["catalog"]["models"].as_array().unwrap();
+    assert_eq!(models.len(), 2, "应读取到 2 个模型: {v}");
+    assert_eq!(models[0]["id"], "mock-fast");
+    assert_eq!(v["catalog"]["currentModelId"], "mock-fast");
+    assert_eq!(v["catalog"]["efforts"].as_array().unwrap().len(), 3);
 }

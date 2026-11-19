@@ -1,15 +1,20 @@
 import { useState } from 'react'
-import { useOutletContext } from 'react-router-dom'
+import { useNavigate, useOutletContext } from 'react-router-dom'
 import { useQuery, useQueryClient } from '@tanstack/react-query'
-import { Box, Typography, Button, Table, TableHead, TableRow, TableCell, TableBody, Chip, Dialog, DialogTitle, DialogContent, DialogActions, TextField, MenuItem, Switch, FormControlLabel, Checkbox, Alert, IconButton, Tooltip, FormGroup } from '@mui/material'
+import { Box, Typography, Button, Table, TableHead, TableRow, TableCell, TableBody, Chip, Dialog, DialogTitle, DialogContent, DialogActions, TextField, MenuItem, Switch, FormControlLabel, Checkbox, Alert, IconButton, Tooltip, FormGroup, Autocomplete, CircularProgress, Divider } from '@mui/material'
 import AddIcon from '@mui/icons-material/Add'
 import EditIcon from '@mui/icons-material/Edit'
-import DeleteIcon from '@mui/icons-material/Delete'
+import RefreshIcon from '@mui/icons-material/Refresh'
+import OpenInNewIcon from '@mui/icons-material/OpenInNew'
 import { get, post, patch, del, parseJson, type Agent, type CliEntry, type Skill, type McpServer } from '../api'
 import type { WsCtx } from './WorkspaceLayout'
 import { DeleteButton } from '../ui'
 
 const EFFORTS = ['minimal', 'low', 'medium', 'high']
+
+interface ModelChoice { id: string; name: string; description?: string | null }
+interface ModelCatalog { models: ModelChoice[]; currentModelId?: string | null; efforts: ModelChoice[]; currentEffortId?: string | null }
+interface ModelsProbe { available: boolean; catalog?: ModelCatalog; error?: string }
 const POLICIES = [
   { v: 'read_auto', label: '只读自动（写操作需审批）' },
   { v: 'write_ask', label: '写操作需审批' },
@@ -76,6 +81,7 @@ export default function AgentsPage() {
 function AgentDialog({ agent, wsId, clis, skills, mcps, onClose, onSaved }: {
   agent: Agent | null; wsId: string; clis: CliEntry[]; skills: Skill[]; mcps: McpServer[]; onClose: () => void; onSaved: () => void
 }) {
+  const nav = useNavigate()
   const [name, setName] = useState(agent?.name || '')
   const [cliEntryId, setCliEntryId] = useState(agent?.cliEntryId || clis[0]?.id || '')
   const [model, setModel] = useState(agent?.model || '')
@@ -87,7 +93,38 @@ function AgentDialog({ agent, wsId, clis, skills, mcps, onClose, onSaved }: {
   const [skillIds, setSkillIds] = useState<string[]>(agent?.skillIds || [])
   const [mcpIds, setMcpIds] = useState<string[]>((agent?.mcpServers || []).map(m => m.id))
   const [gates, setGates] = useState(agent?.gates && agent.gates !== '{}' ? agent.gates : '')
+  const [models, setModels] = useState<ModelChoice[]>([])
+  const [efforts, setEfforts] = useState<ModelChoice[]>([])
+  const [modelsLoading, setModelsLoading] = useState(false)
+  const [modelsMsg, setModelsMsg] = useState('')
   const [err, setErr] = useState('')
+
+  const loadModels = async () => {
+    if (!cliEntryId) return
+    setModelsLoading(true)
+    setModelsMsg('')
+    try {
+      const r = await post<ModelsProbe>(`/cli-entries/${cliEntryId}/models`)
+      if (r.available) {
+        const found = r.catalog?.models || []
+        setModels(found)
+        setEfforts(r.catalog?.efforts || [])
+        setModelsMsg(found.length > 0
+          ? `已从 ACP 读取 ${found.length} 个模型${r.catalog?.currentModelId ? `，当前默认 ${r.catalog.currentModelId}` : ''}`
+          : '该 CLI 未声明模型列表，可继续手动填写')
+        if (!model && r.catalog?.currentModelId) setModel(r.catalog.currentModelId)
+      } else {
+        setModels([])
+        setEfforts([])
+        setModelsMsg(r.error || '无法读取模型')
+      }
+    } catch (e: any) {
+      setModelsMsg(e.message)
+    } finally {
+      setModelsLoading(false)
+    }
+  }
+  const effortOptions = Array.from(new Set([...EFFORTS, ...efforts.map(e => e.id)]))
 
   const save = async () => {
     setErr('')
@@ -106,42 +143,99 @@ function AgentDialog({ agent, wsId, clis, skills, mcps, onClose, onSaved }: {
   }
 
   return (
-    <Dialog open onClose={onClose} fullWidth maxWidth="sm">
+    <Dialog open onClose={onClose} fullWidth maxWidth="md">
       <DialogTitle>{agent ? '编辑智能体' : '新建智能体'}</DialogTitle>
-      <DialogContent sx={{ display: 'grid', gap: 2, pt: '12px !important' }}>
-        <TextField label="名称 *" value={name} onChange={e => setName(e.target.value)} />
-        <TextField select label="CLI 绑定 *" value={cliEntryId} onChange={e => setCliEntryId(e.target.value)}>
-          {clis.map(c => <MenuItem key={c.id} value={c.id}>{c.name}（{c.command}）</MenuItem>)}
-        </TextField>
-        <TextField label="模型（留空用 CLI 默认）" value={model} onChange={e => setModel(e.target.value)} placeholder="如 anthropic/claude-sonnet-4-5" />
-        <TextField select label="推理强度" value={effort} onChange={e => setEffort(e.target.value)}>
-          {EFFORTS.map(x => <MenuItem key={x} value={x}>{x}</MenuItem>)}
-        </TextField>
-        <TextField label="系统提示词（角色/working agreement）" value={systemPrompt} onChange={e => setSystemPrompt(e.target.value)} multiline minRows={3} />
-        <TextField select label="工具审批策略" value={policy} onChange={e => setPolicy(e.target.value)}>
-          {POLICIES.map(p => <MenuItem key={p.v} value={p.v}>{p.label}</MenuItem>)}
-        </TextField>
-        <TextField label="最大并发任务" type="number" value={maxConcurrent} onChange={e => setMaxConcurrent(Number(e.target.value))} />
-        <TextField label="匹配标签（逗号分隔，空=匹配所有任务）" value={matchTags} onChange={e => setMatchTags(e.target.value)} />
-        <TextField label="质量阀覆盖（JSON，可空）" value={gates} onChange={e => setGates(e.target.value)} multiline minRows={2}
-          placeholder='{"loopWindow":5,"silenceSecs":120,"maxTurns":200,"maxWallSecs":3600}' />
-        <Box>
-          <Typography variant="subtitle2">SKILL 授权</Typography>
-          <FormGroup row>
-            {skills.map(s => <FormControlLabel key={s.id} control={<Checkbox size="small" checked={skillIds.includes(s.id)}
-              onChange={e => setSkillIds(ids => e.target.checked ? [...ids, s.id] : ids.filter(x => x !== s.id))} />} label={s.name} />)}
-            {skills.length === 0 && <Typography variant="caption" color="text.secondary">暂无 SKILL</Typography>}
-          </FormGroup>
+      <DialogContent sx={{ pt: '12px !important' }}>
+        <Box sx={{ display: 'grid', gap: 2, gridTemplateColumns: { xs: '1fr', md: 'minmax(0,1fr) minmax(0,1fr)' } }}>
+          <Box sx={{ display: 'grid', gap: 2, alignContent: 'start' }}>
+            <TextField label="名称 *" value={name} onChange={e => setName(e.target.value)} />
+            <TextField select label="CLI 绑定 *" value={cliEntryId} onChange={e => { setCliEntryId(e.target.value); setModels([]); setEfforts([]); setModelsMsg('') }}>
+              {clis.map(c => <MenuItem key={c.id} value={c.id}>{c.name}（{c.command}）</MenuItem>)}
+            </TextField>
+            <Box sx={{ display: 'flex', gap: 1, alignItems: 'flex-start' }}>
+              <Autocomplete
+                fullWidth freeSolo size="small"
+                options={models.map(m => m.id)}
+                value={model}
+                onChange={(_, v) => setModel(v || '')}
+                onInputChange={(_, v) => setModel(v)}
+                renderOption={({ key, ...props }, option) => {
+                  const m = models.find(x => x.id === option)
+                  return (
+                    <li key={key} {...props}>
+                      <Box>
+                        <Typography variant="body2">{m?.name || option}</Typography>
+                        {m?.name && m.name !== option && (
+                          <Typography variant="caption" color="text.secondary" display="block">{option}</Typography>
+                        )}
+                      </Box>
+                    </li>
+                  )
+                }}
+                renderInput={params => (
+                  <TextField {...params} label="模型" placeholder="留空用 CLI 默认"
+                    helperText={modelsMsg || '可手动填写，或从 ACP 读取该 CLI 的模型列表'} />
+                )}
+              />
+              <Button variant="outlined" size="small" onClick={() => void loadModels()}
+                disabled={modelsLoading || !cliEntryId}
+                startIcon={modelsLoading ? <CircularProgress size={14} /> : <RefreshIcon />}
+                sx={{ mt: 0.25, whiteSpace: 'nowrap' }}>
+                {modelsLoading ? '读取中…' : '读取 ACP 模型'}
+              </Button>
+            </Box>
+            <TextField select label="推理强度" value={effort} onChange={e => setEffort(e.target.value)}>
+              {effortOptions.map(x => <MenuItem key={x} value={x}>{x}</MenuItem>)}
+            </TextField>
+            <TextField label="系统提示词（角色/working agreement）" value={systemPrompt} onChange={e => setSystemPrompt(e.target.value)} multiline minRows={3} />
+            <TextField select label="工具审批策略" value={policy} onChange={e => setPolicy(e.target.value)}>
+              {POLICIES.map(p => <MenuItem key={p.v} value={p.v}>{p.label}</MenuItem>)}
+            </TextField>
+            <TextField label="最大并发任务" type="number" value={maxConcurrent} onChange={e => setMaxConcurrent(Number(e.target.value))} />
+            <TextField label="匹配标签（逗号分隔，空=匹配所有任务）" value={matchTags} onChange={e => setMatchTags(e.target.value)} />
+          </Box>
+
+          <Box sx={{ display: 'grid', gap: 2, alignContent: 'start' }}>
+            <TextField label="质量阀覆盖（JSON，可空）" value={gates} onChange={e => setGates(e.target.value)} multiline minRows={2}
+              placeholder='{"loopWindow":5,"silenceSecs":120,"maxTurns":200,"maxWallSecs":3600}' />
+            <Divider />
+            <Box>
+              <Typography variant="subtitle2">SKILL 授权（已选 {skillIds.length} / 共 {skills.length}）</Typography>
+              <Typography variant="caption" color="text.secondary" display="block" sx={{ mb: 1 }}>
+                授权后运行时写入会话目录 .fux/skills/ 并在提示词中引用。
+              </Typography>
+              <FormGroup>
+                {skills.map(s => <FormControlLabel key={s.id} control={<Checkbox size="small" checked={skillIds.includes(s.id)}
+                  onChange={e => setSkillIds(ids => e.target.checked ? [...ids, s.id] : ids.filter(x => x !== s.id))} />} label={s.name} />)}
+                {skills.length === 0 && (
+                  <Box sx={{ display: 'flex', alignItems: 'center', gap: 1 }}>
+                    <Typography variant="caption" color="text.secondary">SKILL 库为空</Typography>
+                    <Button size="small" endIcon={<OpenInNewIcon sx={{ fontSize: 14 }} />}
+                      onClick={() => { onClose(); nav(`/ws/${wsId}/skills`) }}>去导入 SKILL</Button>
+                  </Box>
+                )}
+              </FormGroup>
+            </Box>
+            <Box>
+              <Typography variant="subtitle2">MCP 授权（已选 {mcpIds.length} / 共 {mcps.length}）</Typography>
+              <Typography variant="caption" color="text.secondary" display="block" sx={{ mb: 1 }}>
+                授权后经 ACP session/new 透传给 CLI，密钥在运行时解密注入。
+              </Typography>
+              <FormGroup>
+                {mcps.map(m => <FormControlLabel key={m.id} control={<Checkbox size="small" checked={mcpIds.includes(m.id)}
+                  onChange={e => setMcpIds(ids => e.target.checked ? [...ids, m.id] : ids.filter(x => x !== m.id))} />} label={m.name} />)}
+                {mcps.length === 0 && (
+                  <Box sx={{ display: 'flex', alignItems: 'center', gap: 1 }}>
+                    <Typography variant="caption" color="text.secondary">未注册 MCP 服务</Typography>
+                    <Button size="small" endIcon={<OpenInNewIcon sx={{ fontSize: 14 }} />}
+                      onClick={() => { onClose(); nav(`/ws/${wsId}/mcp`) }}>去注册 MCP</Button>
+                  </Box>
+                )}
+              </FormGroup>
+            </Box>
+            {err && <Alert severity="error">{err}</Alert>}
+          </Box>
         </Box>
-        <Box>
-          <Typography variant="subtitle2">MCP 授权</Typography>
-          <FormGroup row>
-            {mcps.map(m => <FormControlLabel key={m.id} control={<Checkbox size="small" checked={mcpIds.includes(m.id)}
-              onChange={e => setMcpIds(ids => e.target.checked ? [...ids, m.id] : ids.filter(x => x !== m.id))} />} label={m.name} />)}
-            {mcps.length === 0 && <Typography variant="caption" color="text.secondary">暂无 MCP 服务</Typography>}
-          </FormGroup>
-        </Box>
-        {err && <Alert severity="error">{err}</Alert>}
       </DialogContent>
       <DialogActions>
         <Button onClick={onClose}>取消</Button>

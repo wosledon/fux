@@ -51,6 +51,8 @@ pub struct AppState {
     pub nodes: NodeRegistry,
     /// 本地运行中的 Run → 取消信号
     pub local_runs: Mutex<HashMap<String, mpsc::UnboundedSender<()>>>,
+    /// AI 助理常驻 ACP 连接池（按工作区会话复用）
+    pub assistant_pool: api::assistant::AssistantPool,
     pub api_base: String,
 }
 
@@ -81,12 +83,14 @@ pub async fn run() -> anyhow::Result<()> {
         broadcast,
         nodes: NodeRegistry::default(),
         local_runs: Mutex::new(HashMap::new()),
+        assistant_pool: Default::default(),
         api_base: format!("http://127.0.0.1:{port}"),
     });
 
     scheduler::spawn(state.clone());
     watchdog::spawn(state.clone());
     gitflow::spawn_merge_checker(state.clone());
+    api::assistant::spawn_reaper(state.clone());
 
     tracing::info!("Fux 控制面启动: http://{addr}");
     actix_web::HttpServer::new(move || {

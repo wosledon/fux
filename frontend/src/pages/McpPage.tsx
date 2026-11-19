@@ -52,7 +52,7 @@ export default function McpPage() {
         {isAdmin && <Button variant="contained" startIcon={<AddIcon />} onClick={() => setOpen(true)}>注册服务</Button>}
       </Box>
       <Typography variant="caption" color="text.secondary" display="block" sx={{ mb: 2 }}>
-        会话创建时经 ACP session/new 透传给 CLI（按 CLI 能力适配：OpenCode 支持 stdio/HTTP，不支持 SSE）。密钥加密存储，不回传明文。
+        会话创建时经 ACP session/new 透传给 CLI（按 CLI 能力适配：OpenCode 支持 stdio/HTTP，不支持 SSE）。密钥加密存储，不回传明文。注册后，在「智能体」编辑弹窗的 MCP 授权中勾选即可对该智能体启用。
       </Typography>
       <Table size="small">
         <TableHead><TableRow><TableCell>名称</TableCell><TableCell>传输</TableCell><TableCell>命令 / URL</TableCell><TableCell>状态</TableCell><TableCell /></TableRow></TableHead>

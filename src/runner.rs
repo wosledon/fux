@@ -1,7 +1,7 @@
 //! 通用运行器：驱动一次「智能体 × 任务」的 ACP 会话。
 //! 控制面本地执行与远程 runtime 共用此逻辑，差异通过 RunSink 抽象。
 use crate::acp::AcpClient;
-use anyhow::Result;
+use anyhow::{Result, anyhow};
 use async_trait::async_trait;
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
@@ -251,25 +251,31 @@ async fn execute_inner(
         args.push(format!("--effort={}", map_effort(&spec.effort)));
     }
 
-    let mut client = AcpClient::spawn(&spec.command, &args, &spec.env, &spec.workdir).await?;
+    let mut env = spec.env.clone();
+    crate::acp::tweak_env(&spec.cli_kind, &mut env);
+    let mut client = AcpClient::spawn(&spec.command, &args, &env, &spec.workdir).await?;
     let mut updates_rx = client.take_updates();
     let mut requests_rx = client.take_requests();
     client.initialize().await?;
-    let session_id = client
-        .new_session(&spec.workdir, spec.mcp_servers.clone())
+    let session = client
+        .new_session_full(&spec.workdir, spec.mcp_servers.clone())
         .await?;
+    let session_id = session
+        .get("sessionId")
+        .and_then(|s| s.as_str())
+        .map(|s| s.to_string())
+        .ok_or_else(|| anyhow!("session/new 未返回 sessionId"))?;
 
-    // 模型 / 推理强度：按 CLI 能力透传
-    if spec.cli_kind == "opencode" {
-        if !spec.model.is_empty() {
-            client
-                .set_config_option(&session_id, "model", &spec.model)
-                .await;
-        }
-        client
-            .set_config_option(&session_id, "effort", &map_effort(&spec.effort))
-            .await;
-    }
+    // 模型 / 推理强度：按会话声明的配置项透传（兼容旧版固定 id）
+    crate::acp::apply_model_effort(
+        &client,
+        &session,
+        &session_id,
+        &spec.model,
+        &spec.effort,
+        &spec.cli_kind,
+    )
+    .await;
 
     let client = Arc::new(client);
     // pump 只处理 agent→client 请求（权限）与取消信号；

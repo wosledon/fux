@@ -1,12 +1,12 @@
 //! 调度器：自动认领（原子）+ 租约 + 派发（本地/远程节点）+ 本地运行器。
 use crate::runner::{ProjectSpec, RunOutcome, RunSink, RunSpec, UpstreamSpec};
 use crate::server::SharedState;
-use crate::server::api::{agents, mcp, projects};
+use crate::server::api::{agents, projects};
 use crate::server::domain::{self, MoveOpts};
 use crate::server::error::ApiResult;
 use crate::server::events;
 use crate::server::gitflow;
-use crate::server::models::{Agent, CliEntry, Node, Project, Run, Skill, Task};
+use crate::server::models::{Agent, CliEntry, Node, Project, Run, Task};
 use crate::server::workflow;
 use async_trait::async_trait;
 use serde_json::{Value, json};
@@ -326,56 +326,10 @@ async fn dispatch_inner(
         None => None,
     };
 
-    let skills = sqlx::query_as::<_, Skill>(
-        "SELECT s.* FROM skills s JOIN agent_skills a ON a.skill_id = s.id WHERE a.agent_id = ?",
-    )
-    .bind(&agent.id)
-    .fetch_all(&state.db)
-    .await?;
+    let skills = agents::skills_for_agent(state, &agent.id).await?;
 
     // MCP 授权透传（按 CLI 能力；密钥解密后注入 env/headers）
-    let grants = sqlx::query_as::<_, (String, String)>(
-        "SELECT mcp_server_id, tool_whitelist FROM agent_mcp_servers WHERE agent_id = ?",
-    )
-    .bind(&agent.id)
-    .fetch_all(&state.db)
-    .await?;
-    let mut mcp_servers = vec![];
-    for (mid, _wl) in grants {
-        if let Ok(m) = sqlx::query_as::<_, crate::server::models::McpServer>(
-            "SELECT * FROM mcp_servers WHERE id = ?",
-        )
-        .bind(&mid)
-        .fetch_one(&state.db)
-        .await
-        {
-            let env = mcp::env_plain(&m);
-            let args: Vec<String> = serde_json::from_str(&m.args).unwrap_or_default();
-            if m.transport == "stdio" {
-                let env_arr: Vec<Value> = env
-                    .as_object()
-                    .map(|o| {
-                        o.iter()
-                            .map(|(k, v)| json!({ "name": k, "value": v.as_str().unwrap_or("") }))
-                            .collect()
-                    })
-                    .unwrap_or_default();
-                mcp_servers.push(
-                    json!({ "name": m.name, "command": m.command, "args": args, "env": env_arr }),
-                );
-            } else {
-                let headers: Vec<Value> = env
-                    .as_object()
-                    .map(|o| {
-                        o.iter()
-                            .map(|(k, v)| json!({ "name": k, "value": v.as_str().unwrap_or("") }))
-                            .collect()
-                    })
-                    .unwrap_or_default();
-                mcp_servers.push(json!({ "type": m.transport, "name": m.name, "url": m.url, "headers": headers }));
-            }
-        }
-    }
+    let mcp_servers = agents::mcp_configs(state, &agent.id).await?;
 
     // 初始引导评论（认领前积累的）
     let pending = domain::pending_guidance(state, &task.id).await;

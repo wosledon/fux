@@ -35,6 +35,19 @@ pub async fn is_repo(dir: &Path) -> bool {
     dir.exists() && git_ok(dir, &["rev-parse", "--git-dir"]).await
 }
 
+/// 相对路径按进程当前目录解析为绝对路径。
+/// git 子进程以仓库目录为 cwd，若把相对 worktree 路径直接交给 git，
+/// 会解析到仓库内部而不是调用方期望的 data 目录。
+fn absolutize(path: &Path) -> PathBuf {
+    if path.is_absolute() {
+        path.to_path_buf()
+    } else {
+        std::env::current_dir()
+            .map(|cwd| cwd.join(path))
+            .unwrap_or_else(|_| path.to_path_buf())
+    }
+}
+
 /// 本地非 git 目录：一键 init（在任务工作副本中调用）。
 pub async fn init_repo(dir: &Path) -> Result<()> {
     tokio::fs::create_dir_all(dir).await?;
@@ -86,6 +99,8 @@ pub async fn prepare_worktree(
     branch: &str,
     base: &str,
 ) -> Result<()> {
+    // 统一成绝对路径：git worktree add 在 repo_dir 下执行，相对路径会被解析到仓库内部。
+    let worktree_dir = absolutize(worktree_dir);
     if worktree_dir.exists() {
         return Ok(());
     }
@@ -116,7 +131,9 @@ pub async fn prepare_worktree(
 }
 
 pub async fn remove_worktree(repo_dir: &Path, worktree_dir: &Path) {
-    let wt = worktree_dir.to_string_lossy().to_string();
+    // 同 prepare_worktree：git 在 repo_dir 下解析参数，必须先转绝对路径。
+    let wt = absolutize(worktree_dir);
+    let wt = wt.to_string_lossy().to_string();
     git(repo_dir, &["worktree", "remove", "--force", &wt])
         .await
         .ok();
@@ -281,5 +298,53 @@ mod tests {
         );
         assert!(pr_create_url("https://gitea.example.com/o/r", "b", "main").is_some());
         assert!(pr_create_url("/local/path", "b", "main").is_none());
+    }
+
+    /// 回归：git 子进程以仓库目录为 cwd，相对 worktree 路径必须按进程 cwd 解析，
+    /// 否则会被创建到仓库内部，重试时报「目录已存在」。
+    #[tokio::test]
+    async fn prepare_worktree_resolves_relative_path_against_process_cwd() {
+        let repo = tempfile::tempdir().unwrap();
+        git(repo.path(), &["init", "-b", "main"]).await.unwrap();
+        std::fs::write(repo.path().join("README.md"), "test").unwrap();
+        git(repo.path(), &["add", "-A"]).await.unwrap();
+        git(
+            repo.path(),
+            &[
+                "-c",
+                "user.email=t@t",
+                "-c",
+                "user.name=t",
+                "commit",
+                "-m",
+                "init",
+            ],
+        )
+        .await
+        .unwrap();
+
+        let id = crate::new_id();
+        let rel = PathBuf::from("target").join(format!("fux-wt-test-{id}"));
+        prepare_worktree(repo.path(), &rel, "fux/test-rel", "main")
+            .await
+            .unwrap();
+
+        assert!(
+            rel.is_dir(),
+            "worktree 应按进程 cwd 创建: {}",
+            rel.display()
+        );
+        assert!(
+            !repo.path().join(&rel).exists(),
+            "不应在仓库内部创建 worktree"
+        );
+        let list = git(repo.path(), &["worktree", "list", "--porcelain"])
+            .await
+            .unwrap();
+        // worktree list 输出为正斜杠绝对路径，匹配唯一目录名即可。
+        assert!(list.contains(&format!("fux-wt-test-{id}")));
+
+        remove_worktree(repo.path(), &rel).await;
+        assert!(!rel.exists(), "remove_worktree 应清理相对路径 worktree");
     }
 }

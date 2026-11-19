@@ -42,7 +42,29 @@ fn main() {
                 cwd = params.get("cwd").and_then(|c| c.as_str()).unwrap_or(".").to_string();
                 session = cwd.clone();
                 if let Some(id) = id {
-                    send(json!({ "jsonrpc": "2.0", "id": id, "result": { "sessionId": session } }));
+                    send(json!({ "jsonrpc": "2.0", "id": id, "result": {
+                        "sessionId": session,
+                        // 模拟 ACP 会话配置项：供模型/推理强度发现与设置
+                        "configOptions": [
+                            {
+                                "id": "model", "name": "模型", "category": "model", "type": "select",
+                                "currentValue": "mock-fast",
+                                "options": [
+                                    { "value": "mock-fast", "name": "Mock Fast", "description": "快速模型" },
+                                    { "value": "mock-smart", "name": "Mock Smart", "description": "高智能模型" }
+                                ]
+                            },
+                            {
+                                "id": "reasoning", "name": "推理强度", "category": "thought_level", "type": "select",
+                                "currentValue": "medium",
+                                "options": [
+                                    { "value": "low", "name": "Low" },
+                                    { "value": "medium", "name": "Medium" },
+                                    { "value": "high", "name": "High" }
+                                ]
+                            }
+                        ]
+                    }}));
                 }
             }
             "session/set_config_option" | "session/cancel" => {

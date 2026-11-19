@@ -3,7 +3,7 @@ import { useNavigate, useOutletContext } from 'react-router-dom'
 import { useQuery, useQueryClient } from '@tanstack/react-query'
 import {
   Box, Button, Chip, CircularProgress, Divider, IconButton, Paper, Stack, TextField,
-  Tooltip, Typography, ListItemButton,
+  Tooltip, Typography, ListItemButton, Dialog, DialogTitle, DialogContent, DialogActions, MenuItem, Alert,
 } from '@mui/material'
 import AddCommentOutlinedIcon from '@mui/icons-material/AddCommentOutlined'
 import SmartToyOutlinedIcon from '@mui/icons-material/SmartToyOutlined'
@@ -17,9 +17,10 @@ import ErrorOutlineIcon from '@mui/icons-material/ErrorOutline'
 import TaskAltIcon from '@mui/icons-material/TaskAlt'
 import PlayCircleOutlineIcon from '@mui/icons-material/PlayCircleOutline'
 import ArrowForwardIcon from '@mui/icons-material/ArrowForward'
+import SettingsOutlinedIcon from '@mui/icons-material/SettingsOutlined'
 import {
-  API, get, del, getToken, parseJson,
-  type AssistantSession, type AssistantMessage, type Agent, type Board, type Task, type TaskStatus,
+  API, get, patch, del, getToken, parseJson,
+  type AssistantSession, type AssistantMessage, type Agent, type Board, type Task, type TaskStatus, type CliEntry,
 } from '../api'
 import { useAuth } from '../auth'
 import { PersonAvatar, StatusChip, useConfirm, useToast } from '../ui'
@@ -35,18 +36,21 @@ const SUGGESTIONS = [
 ]
 
 export default function AssistantPage() {
-  const { wsId, workspace } = useOutletContext<WsCtx>()
+  const { wsId, workspace, role } = useOutletContext<WsCtx>()
   const { user } = useAuth()
   const nav = useNavigate()
   const qc = useQueryClient()
   const toast = useToast()
   const confirm = useConfirm()
+  const isAdmin = role === 'owner' || role === 'admin'
 
   const [activeId, setActiveId] = useState<string | null>(null)
   const [msgs, setMsgs] = useState<ChatMsg[]>([])
   const [input, setInput] = useState('')
   const [busy, setBusy] = useState(false)
   const [thinking, setThinking] = useState(false)
+  const [status, setStatus] = useState('')
+  const [settingsOpen, setSettingsOpen] = useState(false)
 
   const bottomRef = useRef<HTMLDivElement>(null)
   const abortRef = useRef<AbortController | null>(null)
@@ -60,6 +64,10 @@ export default function AssistantPage() {
   const { data: agents = [] } = useQuery({
     queryKey: ['agents', wsId],
     queryFn: () => get<Agent[]>(`/workspaces/${wsId}/agents`),
+  })
+  const { data: clis = [] } = useQuery({
+    queryKey: ['clis', wsId],
+    queryFn: () => get<CliEntry[]>(`/cli-entries?workspaceId=${wsId}`),
   })
   const { data: messages } = useQuery({
     queryKey: ['assistant-messages', activeId],
@@ -101,10 +109,21 @@ export default function AssistantPage() {
   }, [msgs])
 
   const abortCurrent = () => {
+    const sid = activeId
     abortRef.current?.abort()
     abortRef.current = null
     setBusy(false)
     setThinking(false)
+    setStatus('')
+    if (sid) {
+      // 后端可能仍在生成并最终落库：稍后自动拉回结果，避免“停止后永远看不到回答”
+      for (const ms of [3000, 10000, 30000]) {
+        setTimeout(() => {
+          qc.invalidateQueries({ queryKey: ['assistant-messages', sid] })
+          qc.invalidateQueries({ queryKey: ['assistant-sessions', wsId] })
+        }, ms)
+      }
+    }
   }
 
   const newChat = () => {
@@ -130,6 +149,7 @@ export default function AssistantPage() {
     setMsgs(prev => [...prev, { role: 'user', content: text, createdAt: new Date().toISOString() }, { role: 'assistant', content: '' }])
     setBusy(true)
     setThinking(true)
+    setStatus('正在连接智能体…')
     const ctrl = new AbortController()
     abortRef.current = ctrl
     let sessionId = activeId
@@ -162,17 +182,23 @@ export default function AssistantPage() {
               newChatRef.current = false
               sessionId = ev.sessionId
               setActiveId(ev.sessionId)
+              setStatus('会话已创建，正在等待响应…')
               qc.invalidateQueries({ queryKey: ['assistant-sessions', wsId] })
             } else if (ev.type === 'chunk') {
               setThinking(false)
+              setStatus('')
               setMsgs(prev => {
                 const copy = [...prev]
                 const last = copy[copy.length - 1]
                 if (last?.role === 'assistant') copy[copy.length - 1] = { ...last, content: last.content + ev.text }
                 return copy
               })
+            } else if (ev.type === 'status') {
+              setThinking(true)
+              setStatus(ev.text || '')
             } else if (ev.type === 'error') {
               setThinking(false)
+              setStatus('')
               setMsgs(prev => {
                 const copy = [...prev]
                 const last = copy[copy.length - 1]
@@ -204,6 +230,7 @@ export default function AssistantPage() {
     } finally {
       setBusy(false)
       setThinking(false)
+      setStatus('')
       abortRef.current = null
     }
   }
@@ -278,12 +305,17 @@ export default function AssistantPage() {
           <Box sx={{ width: 30, height: 30, borderRadius: 1, bgcolor: '#eceaff', color: 'primary.main', display: 'grid', placeItems: 'center', flexShrink: 0 }}>
             <SmartToyOutlinedIcon sx={{ fontSize: 17 }} />
           </Box>
-          <Box sx={{ minWidth: 0 }}>
+          <Box sx={{ minWidth: 0, flexGrow: 1 }}>
             <Typography variant="caption" fontWeight={650} noWrap display="block">{assistantAgent?.name || '未配置助理'}</Typography>
             <Typography variant="caption" color="text.secondary" noWrap display="block">
               {assistantAgent ? (assistantAgent.model || '默认模型') : '请先在工作区创建智能体'}
             </Typography>
           </Box>
+          {isAdmin && (
+            <Tooltip title="助理设置">
+              <IconButton size="small" onClick={() => setSettingsOpen(true)}><SettingsOutlinedIcon sx={{ fontSize: 15 }} /></IconButton>
+            </Tooltip>
+          )}
         </Box>
       </Box>
 
@@ -300,6 +332,11 @@ export default function AssistantPage() {
             </Typography>
           </Box>
           <Box sx={{ flexGrow: 1 }} />
+          {isAdmin && (
+            <Tooltip title="助理设置">
+              <IconButton onClick={() => setSettingsOpen(true)}><SettingsOutlinedIcon fontSize="small" /></IconButton>
+            </Tooltip>
+          )}
           <Tooltip title="新对话"><IconButton onClick={newChat}><AddCommentOutlinedIcon fontSize="small" /></IconButton></Tooltip>
         </Box>
 
@@ -357,7 +394,7 @@ export default function AssistantPage() {
                 {thinking && (
                   <Box sx={{ display: 'flex', gap: 1.25, alignItems: 'center', color: 'text.secondary', pl: 0.5 }}>
                     <CircularProgress size={14} />
-                    <Typography variant="caption">正在分析工作区…</Typography>
+                    <Typography variant="caption">{status || '正在分析工作区…'}</Typography>
                   </Box>
                 )}
                 <div ref={bottomRef} />
@@ -446,7 +483,91 @@ export default function AssistantPage() {
           助理通过工作区内置 MCP 执行操作，所有任务变更都会写入事件时间线。
         </Typography>
       </Box>
+      {settingsOpen && (
+        <AssistantSettingsDialog
+          wsId={wsId}
+          agents={agents}
+          clis={clis}
+          settings={workspace.settings}
+          currentAgentId={assistantAgent?.id}
+          onClose={() => setSettingsOpen(false)}
+        />
+      )}
     </Box>
+  )
+}
+
+/// 选择驱动 AI 助理的智能体（保存到工作区 settings.assistantAgentId）。
+function AssistantSettingsDialog({ wsId, agents, clis, settings, currentAgentId, onClose }: {
+  wsId: string; agents: Agent[]; clis: CliEntry[]; settings: string; currentAgentId?: string; onClose: () => void
+}) {
+  const nav = useNavigate()
+  const qc = useQueryClient()
+  const toast = useToast()
+  const [agentId, setAgentId] = useState(currentAgentId || agents[0]?.id || '')
+  const [busy, setBusy] = useState(false)
+  const [err, setErr] = useState('')
+  const agent = agents.find(a => a.id === agentId)
+  const cli = clis.find(c => c.id === agent?.cliEntryId)
+
+  const save = async () => {
+    setBusy(true)
+    setErr('')
+    try {
+      const base = parseJson<Record<string, unknown>>(settings, {})
+      await patch(`/workspaces/${wsId}`, { settings: { ...base, assistantAgentId: agentId } })
+      await qc.invalidateQueries({ queryKey: ['workspace', wsId] })
+      toast('助理设置已保存', 'success')
+      onClose()
+    } catch (e: any) {
+      setErr(e.message)
+    } finally {
+      setBusy(false)
+    }
+  }
+
+  const row = (label: string, value: string) => (
+    <Box sx={{ display: 'flex', justifyContent: 'space-between', gap: 2 }}>
+      <Typography variant="caption" color="text.secondary">{label}</Typography>
+      <Typography variant="caption" sx={{ textAlign: 'right', wordBreak: 'break-all' }}>{value}</Typography>
+    </Box>
+  )
+
+  return (
+    <Dialog open onClose={onClose} fullWidth maxWidth="sm">
+      <DialogTitle>助理设置</DialogTitle>
+      <DialogContent sx={{ display: 'grid', gap: 2, pt: '12px !important' }}>
+        <TextField select label="助理智能体" value={agentId} onChange={e => setAgentId(e.target.value)}
+          helperText="助理会继承该智能体的 CLI、模型、推理强度、系统提示词、SKILL 与 MCP 授权。">
+          {agents.map(a => {
+            const c = clis.find(x => x.id === a.cliEntryId)
+            return <MenuItem key={a.id} value={a.id}>{a.name} · {c?.name || a.cliEntryId}{a.model ? ` · ${a.model}` : ''}</MenuItem>
+          })}
+          {agents.length === 0 && <MenuItem value="" disabled>暂无可选智能体</MenuItem>}
+        </TextField>
+        {agent ? (
+          <Paper variant="outlined" sx={{ p: 1.5, borderRadius: 1.5 }}>
+            <Stack spacing={0.75}>
+              {row('CLI', cli?.name || agent.cliEntryId)}
+              {row('模型', agent.model || 'CLI 默认')}
+              {row('推理强度', agent.reasoningEffort)}
+              {row('SKILL 授权', String(agent.skillIds?.length || 0))}
+              {row('MCP 授权', String(agent.mcpServers?.length || 0))}
+            </Stack>
+          </Paper>
+        ) : (
+          <Box sx={{ display: 'flex', alignItems: 'center', gap: 1 }}>
+            <Typography variant="caption" color="text.secondary">还没有智能体</Typography>
+            <Button size="small" onClick={() => { onClose(); nav(`/ws/${wsId}/agents`) }}>去创建智能体</Button>
+          </Box>
+        )}
+        {err && <Alert severity="error">{err}</Alert>}
+      </DialogContent>
+      <DialogActions>
+        <Button onClick={onClose}>取消</Button>
+        <Button variant="contained" onClick={() => void save()} disabled={busy || !agentId}>保存</Button>
+      </DialogActions>
+    </Dialog>
   )
 }
 

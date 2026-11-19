@@ -476,6 +476,7 @@ mod tests {
             broadcast,
             nodes: NodeRegistry::default(),
             local_runs: Mutex::new(HashMap::new()),
+            assistant_pool: Default::default(),
             api_base: "http://127.0.0.1:0".into(),
         });
         let outcome = RunOutcome {
