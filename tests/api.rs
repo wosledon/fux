@@ -999,6 +999,8 @@ async fn assistant_sessions_and_chat() {
         !body2.contains("正在创建会话"),
         "不应重新创建 ACP 会话: {body2}"
     );
+    assert!(body2.contains("\"type\":\"thought\""), "应转发思考过程: {body2}");
+    assert!(body2.contains("\"type\":\"tool\""), "应转发工具调用: {body2}");
 
     // 会话列表与消息
     let (s, v) = call(
@@ -1027,6 +1029,10 @@ async fn assistant_sessions_and_chat() {
     let msgs = v.as_array().unwrap();
     assert_eq!(msgs[0]["role"], "user");
     assert!(msgs.iter().any(|m| m["role"] == "assistant"));
+    let process = msgs.iter().find(|m| m["role"] == "process").expect("应有执行过程");
+    let p: Value = serde_json::from_str(process["content"].as_str().unwrap()).unwrap();
+    assert!(p["thoughts"].as_str().unwrap().contains("分析任务"));
+    assert!(p["tools"].as_array().unwrap().iter().any(|t| t["title"].as_str().unwrap().contains("编辑")));
 
     // 重命名与删除
     let (s, _) = call(

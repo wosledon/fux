@@ -37,6 +37,65 @@ struct AssistantConn {
     prompt_lock: Mutex<()>,
 }
 
+/// 单轮对话的执行过程（思考 + 工具调用），结束后作为 role=process 落库。
+#[derive(Default)]
+struct ProcessState {
+    thoughts: String,
+    tools: Vec<Value>,
+}
+
+fn upsert_tool(
+    tools: &mut Vec<Value>,
+    id: &str,
+    title: Option<&str>,
+    status: Option<&str>,
+    kind: Option<&str>,
+    detail: Option<&str>,
+) {
+    if id.is_empty() {
+        return;
+    }
+    if let Some(t) = tools
+        .iter_mut()
+        .find(|t| t.get("id").and_then(|v| v.as_str()) == Some(id))
+    {
+        if let Some(title) = title {
+            t["title"] = json!(title);
+        }
+        if let Some(status) = status {
+            t["status"] = json!(status);
+        }
+        if let Some(kind) = kind {
+            t["kind"] = json!(kind);
+        }
+        if let Some(detail) = detail {
+            t["detail"] = json!(detail);
+        }
+    } else {
+        tools.push(json!({
+            "id": id,
+            "title": title.unwrap_or("工具"),
+            "status": status.unwrap_or("running"),
+            "kind": kind.unwrap_or("other"),
+            "detail": detail,
+        }));
+    }
+}
+
+/// 从 rawInput 提取可读的工具操作摘要（命令 / 路径 / 搜索词等）。
+fn tool_detail(u: &Value) -> Option<String> {
+    let raw = u.pointer("/update/rawInput")?;
+    for key in ["command", "path", "pattern", "query", "description", "url", "name"] {
+        if let Some(s) = raw.get(key).and_then(|v| v.as_str()) {
+            let s = s.trim();
+            if !s.is_empty() {
+                return Some(s.chars().take(200).collect());
+            }
+        }
+    }
+    None
+}
+
 impl AssistantPool {
     async fn get(&self, key: &str, fingerprint: &str) -> Option<Arc<AssistantConn>> {
         let map = self.conns.lock().await;
@@ -622,8 +681,12 @@ async fn chat(
     let short_prompt = message.clone();
     tokio::spawn(async move {
         let answer = Arc::new(Mutex::new(String::new()));
-        let handle_update =
-            |u: &Value, tx: &mpsc::UnboundedSender<String>, answer: &Arc<Mutex<String>>| match u
+        let process = Arc::new(std::sync::Mutex::new(ProcessState::default()));
+        let handle_update = |u: &Value,
+                             tx: &mpsc::UnboundedSender<String>,
+                             answer: &Arc<Mutex<String>>,
+                             process: &Arc<std::sync::Mutex<ProcessState>>| {
+            match u
                 .pointer("/update/sessionUpdate")
                 .and_then(|k| k.as_str())
                 .unwrap_or("")
@@ -640,25 +703,64 @@ async fn chat(
                         ));
                     }
                 }
+                "agent_thought_chunk" => {
+                    if let Some(text) = u.pointer("/update/content/text").and_then(|t| t.as_str()) {
+                        if let Ok(mut p) = process.lock() {
+                            p.thoughts.push_str(text);
+                        }
+                        let _ = tx.send(format!(
+                            "data: {}\n\n",
+                            json!({ "type": "thought", "text": text })
+                        ));
+                    }
+                }
                 "tool_call" => {
+                    let id = u
+                        .pointer("/update/toolCallId")
+                        .and_then(|v| v.as_str())
+                        .unwrap_or("");
                     let title = u
                         .pointer("/update/title")
                         .and_then(|t| t.as_str())
                         .unwrap_or("工具");
-                    sse_status(tx, &format!("正在调用工具：{title}"));
+                    let kind = u
+                        .pointer("/update/kind")
+                        .and_then(|v| v.as_str())
+                        .unwrap_or("other");
+                    let status = u
+                        .pointer("/update/status")
+                        .and_then(|v| v.as_str())
+                        .unwrap_or("running");
+                    let detail = tool_detail(u);
+                    if let Ok(mut p) = process.lock() {
+                        upsert_tool(&mut p.tools, id, Some(title), Some(status), Some(kind), detail.as_deref());
+                    }
+                    let _ = tx.send(format!(
+                        "data: {}\n\n",
+                        json!({ "type": "tool", "id": id, "title": title, "status": status, "kind": kind, "detail": detail })
+                    ));
                 }
                 "tool_call_update" => {
-                    if u.pointer("/update/status").and_then(|s| s.as_str()) == Some("completed") {
-                        let title = u
-                            .pointer("/update/title")
-                            .and_then(|t| t.as_str())
-                            .unwrap_or("工具");
-                        sse_status(tx, &format!("工具完成：{title}"));
+                    let id = u
+                        .pointer("/update/toolCallId")
+                        .and_then(|v| v.as_str())
+                        .unwrap_or("");
+                    let title = u.pointer("/update/title").and_then(|t| t.as_str());
+                    let kind = u.pointer("/update/kind").and_then(|v| v.as_str());
+                    let status = u.pointer("/update/status").and_then(|v| v.as_str());
+                    let detail = tool_detail(u);
+                    if let Ok(mut p) = process.lock() {
+                        upsert_tool(&mut p.tools, id, title, status, kind, detail.as_deref());
                     }
+                    let _ = tx.send(format!(
+                        "data: {}\n\n",
+                        json!({ "type": "tool", "id": id, "title": title, "status": status, "kind": kind, "detail": detail })
+                    ));
                 }
                 "plan" => sse_status(tx, "已更新执行计划"),
                 _ => {}
-            };
+            }
+        };
         let result: anyhow::Result<()> = async {
             let (conn, is_new) = match state2.assistant_pool.get(&pool_key, &fingerprint).await {
                 Some(c) => (c, false),
@@ -691,7 +793,7 @@ async fn chat(
                         recv = sub.recv() => match recv {
                             Ok(u) => {
                                 if u.get("sessionId").and_then(|v| v.as_str()) == Some(conn.acp_session_id.as_str()) {
-                                    handle_update(&u, &tx, &answer);
+                                    handle_update(&u, &tx, &answer, &process);
                                 }
                             }
                             Err(broadcast::error::RecvError::Lagged(_)) => {}
@@ -706,7 +808,7 @@ async fn chat(
             };
             while let Ok(u) = sub.try_recv() {
                 if u.get("sessionId").and_then(|v| v.as_str()) == Some(conn.acp_session_id.as_str()) {
-                    handle_update(&u, &tx, &answer);
+                    handle_update(&u, &tx, &answer, &process);
                 }
             }
             *conn.last_used.lock().unwrap_or_else(|e| e.into_inner()) = Instant::now();
@@ -716,6 +818,20 @@ async fn chat(
             resp?;
             Ok(())
         }.await;
+        let process_content = process.lock().ok().and_then(|p| {
+            if p.thoughts.trim().is_empty() && p.tools.is_empty() {
+                None
+            } else {
+                Some(json!({ "thoughts": p.thoughts, "tools": p.tools }).to_string())
+            }
+        });
+        if let Some(content) = process_content {
+            let _ = sqlx::query("INSERT INTO assistant_messages (workspace_id, session_id, role, content) VALUES (?,?, 'process', ?)")
+                .bind(&ws_id2)
+                .bind(&sid2)
+                .bind(&content)
+                .execute(&db).await;
+        }
         let answer_text = answer.lock().await.clone();
         if !answer_text.is_empty() {
             let _ = sqlx::query("INSERT INTO assistant_messages (workspace_id, session_id, role, content) VALUES (?,?, 'assistant', ?)")

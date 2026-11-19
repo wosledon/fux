@@ -93,7 +93,7 @@ export interface AssistantSession {
   id: string; title: string; createdAt: string; updatedAt: string; messageCount: number; preview?: string
 }
 export interface AssistantMessage {
-  id: number; role: 'user' | 'assistant'; content: string; createdAt: string
+  id: number; role: 'user' | 'assistant' | 'process'; content: string; createdAt: string
 }
 
 export const STATUS_LABEL: Record<TaskStatus, string> = {

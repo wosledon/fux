@@ -3,8 +3,10 @@ import { useNavigate, useOutletContext } from 'react-router-dom'
 import { useQuery, useQueryClient } from '@tanstack/react-query'
 import {
   Box, Button, Chip, CircularProgress, Divider, IconButton, Paper, Stack, TextField,
-  Tooltip, Typography, ListItemButton, Dialog, DialogTitle, DialogContent, DialogActions, MenuItem, Alert,
+  Tooltip, Typography, ListItemButton, Dialog, DialogTitle, DialogContent, DialogActions, MenuItem, Alert, Collapse,
 } from '@mui/material'
+import ReactMarkdown from 'react-markdown'
+import remarkGfm from 'remark-gfm'
 import AddCommentOutlinedIcon from '@mui/icons-material/AddCommentOutlined'
 import SmartToyOutlinedIcon from '@mui/icons-material/SmartToyOutlined'
 import SendRoundedIcon from '@mui/icons-material/SendRounded'
@@ -18,15 +20,30 @@ import TaskAltIcon from '@mui/icons-material/TaskAlt'
 import PlayCircleOutlineIcon from '@mui/icons-material/PlayCircleOutline'
 import ArrowForwardIcon from '@mui/icons-material/ArrowForward'
 import SettingsOutlinedIcon from '@mui/icons-material/SettingsOutlined'
+import PsychologyOutlinedIcon from '@mui/icons-material/PsychologyOutlined'
+import ExpandMoreIcon from '@mui/icons-material/ExpandMore'
+import BuildOutlinedIcon from '@mui/icons-material/BuildOutlined'
+import EditOutlinedIcon from '@mui/icons-material/EditOutlined'
+import DescriptionOutlinedIcon from '@mui/icons-material/DescriptionOutlined'
+import TerminalIcon from '@mui/icons-material/Terminal'
+import SearchIcon from '@mui/icons-material/Search'
 import {
   API, get, patch, del, getToken, parseJson,
   type AssistantSession, type AssistantMessage, type Agent, type Board, type Task, type TaskStatus, type CliEntry,
 } from '../api'
 import { useAuth } from '../auth'
-import { PersonAvatar, StatusChip, useConfirm, useToast } from '../ui'
+import { StatusChip, useConfirm, useToast } from '../ui'
 import type { WsCtx } from './WorkspaceLayout'
 
-interface ChatMsg { role: 'user' | 'assistant'; content: string; createdAt?: string }
+interface ChatMsg {
+  role: 'user' | 'assistant' | 'process'
+  content?: string
+  thoughts?: string
+  tools?: ToolCallView[]
+  createdAt?: string
+}
+
+interface ToolCallView { id: string; title: string; status: string; kind?: string; detail?: string }
 
 const SUGGESTIONS = [
   '汇总当前看板进展',
@@ -100,7 +117,20 @@ export default function AssistantPage() {
   // 切换会话时载入历史（流式期间不覆盖本地消息）
   useEffect(() => {
     if (!messages || busy) return
-    setMsgs(messages.map(m => ({ role: m.role, content: m.content, createdAt: m.createdAt })))
+    setMsgs(messages.flatMap<ChatMsg>(m => {
+      if (m.role === 'process') {
+        try {
+          const p = JSON.parse(m.content) as { thoughts?: unknown; tools?: unknown }
+          const thoughts = typeof p.thoughts === 'string' ? p.thoughts : ''
+          const tools = Array.isArray(p.tools) ? p.tools as ToolCallView[] : []
+          if (!thoughts.trim() && tools.length === 0) return []
+          return [{ role: 'process' as const, thoughts, tools, createdAt: m.createdAt }]
+        } catch {
+          return []
+        }
+      }
+      return [{ role: m.role, content: m.content, createdAt: m.createdAt }]
+    }))
   }, [messages, activeId])
 
   // 滚动到底（流式时即时跟随）
@@ -146,7 +176,12 @@ export default function AssistantPage() {
     const text = (preset ?? input).trim()
     if (!text || busy) return
     setInput('')
-    setMsgs(prev => [...prev, { role: 'user', content: text, createdAt: new Date().toISOString() }, { role: 'assistant', content: '' }])
+    setMsgs(prev => [
+      ...prev,
+      { role: 'user', content: text, createdAt: new Date().toISOString() },
+      { role: 'process', thoughts: '', tools: [] },
+      { role: 'assistant', content: '' },
+    ])
     setBusy(true)
     setThinking(true)
     setStatus('正在连接智能体…')
@@ -189,8 +224,38 @@ export default function AssistantPage() {
               setStatus('')
               setMsgs(prev => {
                 const copy = [...prev]
-                const last = copy[copy.length - 1]
-                if (last?.role === 'assistant') copy[copy.length - 1] = { ...last, content: last.content + ev.text }
+                const idx = copy.map(m => m.role).lastIndexOf('assistant')
+                if (idx >= 0) copy[idx] = { ...copy[idx], content: (copy[idx].content || '') + ev.text }
+                return copy
+              })
+            } else if (ev.type === 'thought') {
+              setMsgs(prev => {
+                const copy = [...prev]
+                const idx = copy.map(m => m.role).lastIndexOf('process')
+                if (idx >= 0) copy[idx] = { ...copy[idx], thoughts: (copy[idx].thoughts || '') + ev.text }
+                return copy
+              })
+            } else if (ev.type === 'tool') {
+              setMsgs(prev => {
+                const copy = [...prev]
+                const idx = copy.map(m => m.role).lastIndexOf('process')
+                if (idx >= 0) {
+                  const tools = [...(copy[idx].tools || [])]
+                  const ti = tools.findIndex(t => t.id === ev.id)
+                  if (ti >= 0) {
+                    const cur = tools[ti]
+                    tools[ti] = {
+                      ...cur,
+                      title: ev.title || cur.title,
+                      status: ev.status || cur.status,
+                      kind: ev.kind || cur.kind,
+                      detail: ev.detail || cur.detail,
+                    }
+                  } else if (ev.id) {
+                    tools.push({ id: ev.id, title: ev.title || '工具', status: ev.status || 'running', kind: ev.kind, detail: ev.detail })
+                  }
+                  copy[idx] = { ...copy[idx], tools }
+                }
                 return copy
               })
             } else if (ev.type === 'status') {
@@ -202,7 +267,7 @@ export default function AssistantPage() {
               setMsgs(prev => {
                 const copy = [...prev]
                 const last = copy[copy.length - 1]
-                if (last?.role === 'assistant') copy[copy.length - 1] = { ...last, content: `${last.content}\n\n> 出错：${ev.message}` }
+                if (last?.role === 'assistant') copy[copy.length - 1] = { ...last, content: `${last.content || ''}\n\n> 出错：${ev.message}` }
                 return copy
               })
             }
@@ -261,6 +326,8 @@ export default function AssistantPage() {
     [tasks],
   )
   const doingTasks = useMemo(() => tasks.filter(t => t.status === 'in_progress').slice(0, 5), [tasks])
+  const lastAssistantIdx = msgs.map(m => m.role).lastIndexOf('assistant')
+  const lastProcessIdx = msgs.map(m => m.role).lastIndexOf('process')
 
   return (
     <Box sx={{ height: '100%', display: 'flex', overflow: 'hidden', bgcolor: '#fbfbfd' }}>
@@ -345,49 +412,41 @@ export default function AssistantPage() {
             {msgs.length === 0 ? (
               <EmptyIntro name={displayName} onPick={s => void send(s)} />
             ) : (
-              <Stack spacing={3}>
+              <Stack spacing={2.75}>
                 {msgs.map((m, i) => {
-                  const isUser = m.role === 'user'
-                  const isLast = i === msgs.length - 1
-                  return (
-                    <Box key={i} sx={{ display: 'flex', flexDirection: isUser ? 'row-reverse' : 'row', gap: 1.25, alignItems: 'flex-start' }}>
-                      {isUser
-                        ? <PersonAvatar name={displayName} size={32} />
-                        : <Box sx={{ width: 32, height: 32, borderRadius: 1, bgcolor: '#eceaff', color: 'primary.main', display: 'grid', placeItems: 'center', flexShrink: 0 }}><SmartToyOutlinedIcon sx={{ fontSize: 18 }} /></Box>}
-                      <Box sx={{ maxWidth: '82%', minWidth: 0 }}>
-                        <Box sx={{ display: 'flex', alignItems: 'center', gap: 0.75, mb: 0.5, justifyContent: isUser ? 'flex-end' : 'flex-start' }}>
-                          <Typography variant="caption" color="text.secondary">
-                            {isUser ? '你' : 'Fux 助理'}{m.createdAt ? ` · ${fmtTime(m.createdAt)}` : ''}
-                          </Typography>
-                          {!isUser && m.content && (
-                            <Tooltip title="复制回答">
-                              <IconButton size="small" onClick={() => void copyText(m.content)} sx={{ p: 0.25 }}>
-                                <ContentCopyIcon sx={{ fontSize: 13 }} />
-                              </IconButton>
-                            </Tooltip>
-                          )}
-                        </Box>
-                        <Paper elevation={0} sx={{
-                          p: 1.75, px: 2, borderRadius: isUser ? '16px 16px 4px 16px' : '16px 16px 16px 4px',
-                          bgcolor: isUser ? 'primary.main' : '#fff',
-                          color: isUser ? '#fff' : 'text.primary',
-                          border: isUser ? 'none' : '1px solid', borderColor: 'divider',
-                          boxShadow: isUser ? 'none' : '0 1px 3px rgba(29,36,58,0.04)',
-                        }}>
-                          {isUser
-                            ? <Typography variant="body2" sx={{ whiteSpace: 'pre-wrap', wordBreak: 'break-word' }}>{m.content}</Typography>
-                            : m.content
-                              ? <RichText text={m.content} />
-                              : <TypingDots />
-                          }
-                          {busy && isLast && !isUser && m.content && (
-                            <Box component="span" sx={{
-                              display: 'inline-block', width: 7, height: 16, ml: 0.5, bgcolor: 'primary.main', verticalAlign: '-3px',
-                              animation: 'cursorBlink 1s steps(1) infinite', '@keyframes cursorBlink': { '50%': { opacity: 0 } },
-                            }} />
-                          )}
-                        </Paper>
+                  if (m.role === 'process') {
+                    return <ProcessBlock key={i} thoughts={m.thoughts || ''} tools={m.tools || []} live={busy && i === lastProcessIdx} />
+                  }
+                  if (m.role === 'user') {
+                    return (
+                      <Box key={i} sx={{ display: 'flex', justifyContent: 'flex-end' }}>
+                        <Box sx={{
+                          maxWidth: { xs: '88%', md: '72%' }, px: 2, py: 1.25,
+                          borderRadius: '16px 16px 4px 16px', bgcolor: 'primary.main', color: '#fff',
+                          fontSize: 14, lineHeight: 1.7, whiteSpace: 'pre-wrap', wordBreak: 'break-word',
+                        }}>{m.content}</Box>
                       </Box>
+                    )
+                  }
+                  const isLastAssistant = i === lastAssistantIdx
+                  return (
+                    <Box key={i} sx={{ maxWidth: 900 }}>
+                      {m.content ? <Markdown text={m.content} /> : <TypingDots />}
+                      {busy && isLastAssistant && m.content && (
+                        <Box component="span" sx={{
+                          display: 'inline-block', width: 7, height: 15, ml: 0.5, bgcolor: 'primary.main', verticalAlign: '-3px',
+                          animation: 'cursorBlink 1s steps(1) infinite', '@keyframes cursorBlink': { '50%': { opacity: 0 } },
+                        }} />
+                      )}
+                      {m.content && (
+                        <Box sx={{ display: 'flex', justifyContent: 'flex-end', mt: 0.25 }}>
+                          <Tooltip title="复制回答">
+                            <IconButton size="small" onClick={() => void copyText(m.content || '')} sx={{ p: 0.5 }}>
+                              <ContentCopyIcon sx={{ fontSize: 13 }} />
+                            </IconButton>
+                          </Tooltip>
+                        </Box>
+                      )}
                     </Box>
                   )
                 })}
@@ -655,62 +714,105 @@ function TypingDots() {
   )
 }
 
-function RichText({ text }: { text: string }) {
-  const blocks = useMemo(() => splitFences(text), [text])
+function Markdown({ text }: { text: string }) {
   return (
-    <Box sx={{ fontSize: 14, lineHeight: 1.75, wordBreak: 'break-word' }}>
-      {blocks.map((b, i) => b.type === 'code' ? (
-        <Box key={i} sx={{ position: 'relative', my: 1 }}>
-          <Box component="pre" sx={{
-            m: 0, p: 1.5, pr: 4.5, borderRadius: 1, bgcolor: '#0f172a', color: '#e2e8f0',
-            fontFamily: 'ui-monospace, SFMono-Regular, Menlo, monospace', fontSize: 12.5, overflowX: 'auto',
-            whiteSpace: 'pre', lineHeight: 1.6,
-          }}>{b.text}</Box>
-          <Tooltip title="复制代码">
-            <IconButton size="small" onClick={() => void navigator.clipboard.writeText(b.text)}
-              sx={{ position: 'absolute', top: 6, right: 6, color: '#94a3b8' }}>
-              <ContentCopyIcon sx={{ fontSize: 13 }} />
-            </IconButton>
-          </Tooltip>
-        </Box>
-      ) : (
-        <Box key={i} sx={{ whiteSpace: 'pre-wrap' }}>{renderInline(b.text)}</Box>
-      ))}
+    <Box sx={{
+      fontSize: 14, lineHeight: 1.75, wordBreak: 'break-word', color: 'text.primary',
+      '& > :first-of-type': { mt: 0 },
+      '& > :last-child': { mb: 0 },
+      '& p': { my: 1 },
+      '& h1, & h2, & h3, & h4': { fontWeight: 700, mt: 2, mb: 1, lineHeight: 1.4 },
+      '& h1': { fontSize: 22 },
+      '& h2': { fontSize: 18 },
+      '& h3': { fontSize: 16 },
+      '& h4': { fontSize: 14.5 },
+      '& ul, & ol': { pl: 3, my: 1 },
+      '& li': { my: 0.35 },
+      '& li > p': { my: 0.25 },
+      '& blockquote': { borderLeft: '3px solid', borderColor: 'divider', pl: 1.5, color: 'text.secondary', my: 1, ml: 0 },
+      '& a': { color: 'primary.main', textDecoration: 'none', '&:hover': { textDecoration: 'underline' } },
+      '& hr': { border: 0, borderTop: '1px solid', borderColor: 'divider', my: 2 },
+      '& table': { borderCollapse: 'collapse', width: '100%', my: 1.5, fontSize: 13, display: 'block', overflowX: 'auto' },
+      '& th, & td': { border: '1px solid', borderColor: 'divider', px: 1, py: 0.5, textAlign: 'left' },
+      '& th': { bgcolor: '#f7f8fb', fontWeight: 700 },
+      '& code': { px: 0.5, py: 0.1, borderRadius: 0.5, bgcolor: 'rgba(29,36,58,0.07)', fontFamily: 'ui-monospace, SFMono-Regular, Menlo, monospace', fontSize: '0.92em' },
+      '& pre': { bgcolor: '#0f172a', color: '#e2e8f0', p: 1.5, borderRadius: 1, overflowX: 'auto', my: 1.25, lineHeight: 1.6 },
+      '& pre code': { bgcolor: 'transparent', color: 'inherit', p: 0, fontSize: 12.5, fontFamily: 'ui-monospace, SFMono-Regular, Menlo, monospace' },
+    }}>
+      <ReactMarkdown remarkPlugins={[remarkGfm]}>{text}</ReactMarkdown>
     </Box>
   )
 }
 
-function splitFences(text: string): { type: 'text' | 'code'; text: string }[] {
-  const out: { type: 'text' | 'code'; text: string }[] = []
-  const re = /```[\w-]*\n([\s\S]*?)```/g
-  let last = 0
-  let m: RegExpExecArray | null
-  while ((m = re.exec(text))) {
-    if (m.index > last) out.push({ type: 'text', text: text.slice(last, m.index) })
-    out.push({ type: 'code', text: m[1].replace(/\n$/, '') })
-    last = m.index + m[0].length
-  }
-  if (last < text.length) out.push({ type: 'text', text: text.slice(last) })
-  return out
+const TOOL_STATUS: Record<string, string> = {
+  pending: '等待',
+  in_progress: '执行中',
+  running: '执行中',
+  completed: '完成',
+  failed: '失败',
 }
 
-function renderInline(text: string) {
-  const parts = text.split(/(\*\*[^*]+\*\*|`[^`]+`)/g)
-  return parts.map((p, i) => {
-    if (p.startsWith('**') && p.endsWith('**') && p.length > 4) return <strong key={i}>{p.slice(2, -2)}</strong>
-    if (p.startsWith('`') && p.endsWith('`') && p.length > 2) {
-      return (
-        <Box component="code" key={i} sx={{ px: 0.5, py: 0.1, borderRadius: 0.5, bgcolor: 'rgba(29,36,58,0.07)', fontFamily: 'monospace', fontSize: '0.92em' }}>
-          {p.slice(1, -1)}
+function ProcessBlock({ thoughts, tools, live }: { thoughts: string; tools: ToolCallView[]; live: boolean }) {
+  const [open, setOpen] = useState(live)
+  useEffect(() => { if (live) setOpen(true) }, [live])
+  const hasThoughts = thoughts.trim().length > 0
+  if (!hasThoughts && tools.length === 0) return null
+  return (
+    <Box sx={{ maxWidth: 900 }}>
+      <Box onClick={() => setOpen(v => !v)} sx={{
+        display: 'inline-flex', alignItems: 'center', gap: 0.75, cursor: 'pointer',
+        color: 'text.secondary', py: 0.25, '&:hover': { color: 'text.primary' },
+      }}>
+        <PsychologyOutlinedIcon sx={{ fontSize: 16 }} />
+        <Typography variant="caption" fontWeight={650}>执行过程</Typography>
+        {tools.length > 0 && <Chip size="small" variant="outlined" label={`${tools.length} 个工具`} sx={{ height: 18, fontSize: 10 }} />}
+        {live && <CircularProgress size={10} />}
+        <ExpandMoreIcon sx={{ fontSize: 16, transition: 'transform .15s', transform: open ? 'rotate(180deg)' : 'none' }} />
+      </Box>
+      <Collapse in={open} timeout="auto" unmountOnExit>
+        <Box sx={{
+          mt: 0.75, pl: 1.5, ml: 0.5, borderLeft: '2px solid', borderColor: 'divider',
+          display: 'grid', gap: 0.75,
+        }}>
+          {tools.map(t => <ToolRow key={t.id || t.title} tool={t} />)}
+          {hasThoughts && (
+            <Box component="pre" sx={{
+              m: 0, fontFamily: 'inherit', fontSize: 12.5, lineHeight: 1.7, color: 'text.secondary',
+              whiteSpace: 'pre-wrap', wordBreak: 'break-word', maxHeight: 280, overflowY: 'auto',
+            }}>{thoughts}</Box>
+          )}
         </Box>
-      )
-    }
-    return <span key={i}>{p}</span>
-  })
+      </Collapse>
+    </Box>
+  )
 }
 
-function fmtTime(iso: string) {
-  return iso.replace('T', ' ').slice(11, 16)
+function ToolIcon({ kind }: { kind?: string }) {
+  const sx = { fontSize: 14 }
+  switch (kind) {
+    case 'edit': return <EditOutlinedIcon sx={sx} />
+    case 'read': return <DescriptionOutlinedIcon sx={sx} />
+    case 'execute': return <TerminalIcon sx={sx} />
+    case 'search': return <SearchIcon sx={sx} />
+    default: return <BuildOutlinedIcon sx={sx} />
+  }
+}
+
+function ToolRow({ tool }: { tool: ToolCallView }) {
+  const color = tool.status === 'completed' ? 'success.main' : tool.status === 'failed' ? 'error.main' : 'primary.main'
+  const label = tool.detail
+    ? (tool.title && tool.title !== 'execute' && tool.title !== '工具' ? `${tool.title} · ${tool.detail}` : tool.detail)
+    : tool.title
+  return (
+    <Box sx={{ display: 'flex', alignItems: 'center', gap: 0.75 }}>
+      <Box sx={{ color: 'text.disabled', display: 'flex', flexShrink: 0 }}><ToolIcon kind={tool.kind} /></Box>
+      <Typography variant="caption" sx={{ flexGrow: 1, minWidth: 0, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+        {label}
+      </Typography>
+      <Box component="span" sx={{ width: 6, height: 6, borderRadius: '50%', bgcolor: color, flexShrink: 0 }} />
+      <Typography variant="caption" sx={{ color, flexShrink: 0 }}>{TOOL_STATUS[tool.status] || tool.status}</Typography>
+    </Box>
+  )
 }
 
 function groupSessions(sessions: AssistantSession[]) {
