@@ -197,7 +197,7 @@ function AgentDialog({ agent, wsId, clis, skills, mcps, onClose, onSaved }: {
 
           <Box sx={{ display: 'grid', gap: 2, alignContent: 'start' }}>
             <TextField label="质量阀覆盖（JSON，可空）" value={gates} onChange={e => setGates(e.target.value)} multiline minRows={2}
-              placeholder='{"loopWindow":5,"silenceSecs":120,"maxTurns":200,"maxWallSecs":3600}' />
+              placeholder='{"loopWindow":10,"silenceSecs":120,"maxTurns":200,"maxWallSecs":3600}' />
             <Divider />
             <Box>
               <Typography variant="subtitle2">SKILL 授权（已选 {skillIds.length} / 共 {skills.length}）</Typography>

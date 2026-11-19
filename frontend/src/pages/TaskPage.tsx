@@ -3,7 +3,7 @@ import { useNavigate, useOutletContext, useParams } from 'react-router-dom'
 import { useQuery, useQueryClient } from '@tanstack/react-query'
 import {
   Box, Typography, Chip, IconButton, Tabs, Tab, TextField, Button, Divider, Alert, Paper,
-  Checkbox, FormControlLabel, Dialog, DialogTitle, DialogContent, DialogActions, Link, Tooltip, CircularProgress, LinearProgress,
+  Checkbox, FormControlLabel, Dialog, DialogTitle, DialogContent, DialogActions, Link, Tooltip, CircularProgress, LinearProgress, Collapse,
 } from '@mui/material'
 import ArrowBackIcon from '@mui/icons-material/ArrowBack'
 import SendIcon from '@mui/icons-material/Send'
@@ -24,14 +24,38 @@ import AccountTreeIcon from '@mui/icons-material/AccountTree'
 import SwapHorizIcon from '@mui/icons-material/SwapHoriz'
 import ExpandMoreIcon from '@mui/icons-material/ExpandMore'
 import ExpandLessIcon from '@mui/icons-material/ExpandLess'
+import UnfoldMoreIcon from '@mui/icons-material/UnfoldMore'
+import UnfoldLessIcon from '@mui/icons-material/UnfoldLess'
+import PsychologyOutlinedIcon from '@mui/icons-material/PsychologyOutlined'
 import { get, post, taskEventsUrl, parseJson, STATUS_LABEL, STAGE_LABEL, STAGE_COLOR, type Task, type Run, type Project, type Envelope, type Workflow, type WorkflowStage, type Delivery, type Agent } from '../api'
 import type { WsCtx } from './WorkspaceLayout'
-import { EmptyState, PersonAvatar, StatusChip, useToast } from '../ui'
+import { EmptyState, PersonAvatar, StatusChip, Markdown, ToolRow, toolDetail, useToast, type ToolCallView } from '../ui'
 import WorkflowCanvas, { autoLayout, NODE_H_STATUS } from './WorkflowCanvas'
 
 const fmtEventTime = (s?: string) => s ? `${s.slice(5, 10)} ${s.slice(11, 19)}` : ''
 
-type TimelineItem = { kind: string; env?: Envelope; text?: string; runId?: string; at: string }
+const fmtDuration = (from?: string, to?: string) => {
+  if (!from || !to) return ''
+  const ms = new Date(to).getTime() - new Date(from).getTime()
+  if (!Number.isFinite(ms) || ms < 0) return ''
+  const sec = Math.round(ms / 1000)
+  if (sec < 60) return `${sec} 秒`
+  const min = Math.floor(sec / 60)
+  if (min < 60) return `${min} 分钟`
+  return `${Math.floor(min / 60)} 小时 ${min % 60} 分`
+}
+
+const fmtChars = (n: number) => n >= 10000 ? `${(n / 10000).toFixed(1)} 万字` : `${n} 字`
+
+type ProcessItem =
+  | { kind: 'message'; text: string; at: string }
+  | { kind: 'thought'; text: string; at: string }
+  | { kind: 'tool'; at: string; tool: ToolCallView }
+  | { kind: 'plan'; at: string; entries: any[] }
+
+type RunEntry = { type: 'run'; runId: string; start?: Envelope; items: ProcessItem[]; at: string }
+type TimelineEntry = { type: 'row'; kind: string; env?: Envelope; text?: string; at: string } | RunEntry
+type ExpandSignal = { open: boolean; n: number } | null
 
 export default function TaskPage() {
   const { taskId = '' } = useParams()
@@ -41,6 +65,7 @@ export default function TaskPage() {
   const toast = useToast()
   const [tab, setTab] = useState(0)
   const [events, setEvents] = useState<Envelope[]>([])
+  const [expandSignal, setExpandSignal] = useState<ExpandSignal>(null)
   const [comment, setComment] = useState('')
   const [busy, setBusy] = useState(false)
   const [manualConfirm, setManualConfirm] = useState(false)
@@ -115,32 +140,70 @@ export default function TaskPage() {
     review: '评论作为评审意见；驳回请使用「驳回」按钮',
   } as Record<string, string>)[task.status] || '评论不会触发执行' : ''
 
-  const items = useMemo(() => {
-    const out: TimelineItem[] = []
+  const toolStatus = useMemo(() => {
+    const m = new Map<string, string>()
+    for (const e of events) if (e.kind === 'tool.result') m.set(e.payload?.toolCallId, e.payload?.status || 'completed')
+    return m
+  }, [events])
+
+  /** 将事件流折叠为「里程碑 + Run 过程」：Run 内的思考/工具/输出聚合，避免逐 token 事件把时间轴撞爆。 */
+  const timeline = useMemo(() => {
+    const out: TimelineEntry[] = []
+    const runs = new Map<string, RunEntry>()
+    const ensureRun = (runId: string, at: string) => {
+      let r = runs.get(runId)
+      if (!r) { r = { type: 'run', runId, items: [], at }; runs.set(runId, r); out.push(r) }
+      return r
+    }
     for (const env of events) {
-      if (env.kind === 'agent.message' || env.kind === 'agent.thought') {
-        const last = out[out.length - 1]
-        const text = env.payload?.text || ''
-        if (last && last.kind === env.kind && last.runId === env.runId) { last.text = last.text ? `${last.text}\n${text}` : text }
-        else out.push({ kind: env.kind, text, runId: env.runId, at: env.createdAt })
-      } else if (env.kind === 'usage.updated' || env.kind === 'notification') {
-        continue
-      } else {
-        out.push({ kind: env.kind, env, at: env.createdAt })
+      const p = env.payload || {}
+      switch (env.kind) {
+        case 'agent.message':
+        case 'agent.thought': {
+          const text = typeof p.text === 'string' ? p.text : ''
+          if (!text) break
+          const kind = env.kind === 'agent.message' ? 'message' : 'thought'
+          if (!env.runId) { out.push({ type: 'row', kind: env.kind, text, at: env.createdAt }); break }
+          const run = ensureRun(env.runId, env.createdAt)
+          const last = run.items[run.items.length - 1]
+          // 流式分片直接拼接，不插换行，否则会把单词/中文词组从中间拆开
+          if (last && (last.kind === 'message' || last.kind === 'thought') && last.kind === kind) last.text += text
+          else run.items.push({ kind, text, at: env.createdAt })
+          break
+        }
+        case 'tool.call': {
+          if (!env.runId) { out.push({ type: 'row', kind: env.kind, env, at: env.createdAt }); break }
+          const run = ensureRun(env.runId, env.createdAt)
+          const id = typeof p.toolCallId === 'string' ? p.toolCallId : `seq-${env.seq}`
+          const title = [p.title, p.name, p.kind].find(v => typeof v === 'string' && v) || '工具'
+          run.items.push({ kind: 'tool', at: env.createdAt, tool: { id, title, kind: p.kind, status: toolStatus.get(id) || p.status || 'pending', detail: toolDetail(p.rawInput) } })
+          break
+        }
+        case 'plan.updated': {
+          if (!env.runId) { out.push({ type: 'row', kind: env.kind, env, at: env.createdAt }); break }
+          ensureRun(env.runId, env.createdAt).items.push({ kind: 'plan', at: env.createdAt, entries: Array.isArray(p.entries) ? p.entries : [] })
+          break
+        }
+        case 'run.started': {
+          if (!env.runId) { out.push({ type: 'row', kind: env.kind, env, at: env.createdAt }); break }
+          ensureRun(env.runId, env.createdAt).start = env
+          break
+        }
+        case 'tool.result':
+        case 'usage.updated':
+        case 'notification':
+          break
+        default:
+          out.push({ type: 'row', kind: env.kind, env, at: env.createdAt })
       }
     }
     return out
-  }, [events])
+  }, [events, toolStatus])
 
   const resolvedApprovals = useMemo(() => {
     const s = new Set<string>()
     for (const e of events) if (e.kind === 'permission.resolved') s.add(e.payload?.approvalId)
     return s
-  }, [events])
-  const toolStatus = useMemo(() => {
-    const m = new Map<string, string>()
-    for (const e of events) if (e.kind === 'tool.result') m.set(e.payload?.toolCallId, e.payload?.status || 'completed')
-    return m
   }, [events])
 
   if (!task) return (
@@ -199,7 +262,7 @@ export default function TaskPage() {
               position: 'sticky', top: 0, zIndex: 3, px: 2, borderBottom: '1px solid', borderColor: 'divider',
               bgcolor: '#fafbfc', flexShrink: 0, borderTopLeftRadius: 'inherit', borderTopRightRadius: 'inherit',
             }}>
-              <Tab label={`时间轴 ${items.length}`} /><Tab label="任务说明" />{task.workflowId && <Tab label="流程" />}
+              <Tab label={`时间轴 ${timeline.length}`} /><Tab label="任务说明" />{task.workflowId && <Tab label="流程" />}
             </Tabs>
 
       {tab === 0 && (
@@ -211,12 +274,18 @@ export default function TaskPage() {
             )}
             <Box sx={{ display: 'flex', alignItems: 'center', gap: 1, mb: 1.75 }}>
               <Typography variant="subtitle2" sx={{ flexGrow: 1 }}>活动时间轴</Typography>
-              <Typography variant="caption" color="text.secondary">共 {items.length} 条动态</Typography>
+              <Typography variant="caption" color="text.secondary">共 {events.length} 条动态 · {timeline.filter(e => e.type === 'run').length} 个 Run</Typography>
+              <Tooltip title="展开全部过程"><IconButton size="small" onClick={() => setExpandSignal(s => ({ open: true, n: (s?.n || 0) + 1 }))}><UnfoldMoreIcon fontSize="small" /></IconButton></Tooltip>
+              <Tooltip title="折叠全部过程"><IconButton size="small" onClick={() => setExpandSignal(s => ({ open: false, n: (s?.n || 0) + 1 }))}><UnfoldLessIcon fontSize="small" /></IconButton></Tooltip>
             </Box>
-            {items.length === 0 && <EmptyState title="还没有任务动态" desc="智能体输出、工具调用、评论和状态变化会实时出现在这里。" />}
-            {items.length > 0 && (
+            {timeline.length === 0 && <EmptyState title="还没有任务动态" desc="智能体输出、工具调用、评论和状态变化会实时出现在这里。" />}
+            {timeline.length > 0 && (
               <Box sx={{ position: 'relative', '&::before': { content: '""', position: 'absolute', left: 13, top: 12, bottom: 24, width: 2, borderRadius: 1, bgcolor: '#e6e8ef' } }}>
-                {items.map((it, i) => {
+                {timeline.map((entry, i) => {
+                  if (entry.type === 'run') {
+                    return <RunTimelineGroup key={entry.runId} entry={entry} run={(data?.runs || []).find(r => r.id === entry.runId)} signal={expandSignal} />
+                  }
+                  const it = entry
                   const env = it.env
                   const time = fmtEventTime(it.at)
                   switch (it.kind) {
@@ -543,7 +612,7 @@ function TimelineRow({ icon, node, tone = 'default', title, time, children }: {
 }) {
   const t = TIMELINE_TONE[tone]
   return (
-    <Box sx={{ position: 'relative', display: 'flex', gap: 1.5, pb: 2.25 }}>
+    <Box sx={{ position: 'relative', display: 'flex', gap: 1.5, pb: 1.5 }}>
       <Box sx={{ position: 'relative', zIndex: 1, width: 28, flexShrink: 0, display: 'flex', justifyContent: 'center', pt: 0.25 }}>
         {node || (
           <Box sx={{
@@ -560,6 +629,218 @@ function TimelineRow({ icon, node, tone = 'default', title, time, children }: {
         {children && <Box sx={{ mt: 1 }}>{children}</Box>}
       </Box>
     </Box>
+  )
+}
+
+const RUN_STATUS_META: Record<string, { label: string; tone: keyof typeof TIMELINE_TONE }> = {
+  running: { label: '执行中', tone: 'primary' },
+  finished: { label: '完成', tone: 'success' },
+  cancelled: { label: '已取消', tone: 'error' },
+  failed: { label: '失败', tone: 'error' },
+}
+
+/** Run 里程碑：头部始终可见；思考与工具调用可折叠，智能体输出始终展示。 */
+function RunTimelineGroup({ entry, run, signal }: { entry: RunEntry; run?: Run; signal: ExpandSignal }) {
+  const live = run?.status === 'running'
+  const meta = (run && RUN_STATUS_META[run.status]) || { label: '已结束', tone: 'muted' as const }
+  const t = TIMELINE_TONE[meta.tone]
+
+  const startAt = entry.start?.createdAt || entry.at
+  const lastAt = entry.items.length > 0 ? entry.items[entry.items.length - 1].at : entry.at
+  const endAt = run?.endedAt || (live ? undefined : lastAt)
+  const tools = entry.items.filter((it): it is Extract<ProcessItem, { kind: 'tool' }> => it.kind === 'tool')
+  const thoughtChars = entry.items.reduce((n, it) => n + (it.kind === 'thought' ? it.text.length : 0), 0)
+  const messageCount = entry.items.filter(it => it.kind === 'message').length
+  const stageName = entry.start?.payload?.stageName || run?.stageKey || ''
+  const agentName = entry.start?.payload?.agentName || ''
+  const title = stageName || `Run ${entry.runId.slice(0, 8)}`
+  const stats = [
+    agentName,
+    fmtDuration(startAt, endAt),
+    run?.turnCount ? `${run.turnCount} 轮` : '',
+    tools.length > 0 ? `${tools.length} 次工具调用` : '',
+    thoughtChars > 0 ? `思考 ${fmtChars(thoughtChars)}` : '',
+    messageCount > 0 ? `${messageCount} 段输出` : '',
+  ].filter(Boolean)
+
+  const icon = live
+    ? <AutorenewIcon sx={{ fontSize: 15 }} />
+    : meta.tone === 'error' ? <CancelIcon sx={{ fontSize: 15 }} /> : <CheckCircleIcon sx={{ fontSize: 15 }} />
+
+  return (
+    <Box sx={{ position: 'relative', pb: 2 }}>
+      <Box sx={{ display: 'flex', gap: 1.5 }}>
+        <Box sx={{ position: 'relative', zIndex: 1, width: 28, flexShrink: 0, display: 'flex', justifyContent: 'center', pt: 0.25 }}>
+          <Box sx={{
+            width: 26, height: 26, borderRadius: '50%', bgcolor: t.bg, color: t.color,
+            display: 'grid', placeItems: 'center', border: '2px solid #fff', boxShadow: '0 0 0 1px #e6e8ef',
+          }}>{icon}</Box>
+        </Box>
+        <Box sx={{ flexGrow: 1, minWidth: 0, pt: 0.25 }}>
+          <Box sx={{ display: 'flex', alignItems: 'center', gap: 1 }}>
+            <Typography variant="body2" fontWeight={650} sx={{ lineHeight: 1.4, minWidth: 0, wordBreak: 'break-word' }}>{title}</Typography>
+            <Chip size="small" label={meta.label} sx={{ height: 19, fontSize: 10.5, fontWeight: 650, bgcolor: t.bg, color: t.color }} />
+            {live && <CircularProgress size={11} />}
+            <Box sx={{ flexGrow: 1 }} />
+            <Typography variant="caption" color="text.secondary" sx={{ flexShrink: 0, fontVariantNumeric: 'tabular-nums' }}>
+              {fmtEventTime(startAt)}{endAt ? ` → ${fmtEventTime(endAt)}` : ''}
+            </Typography>
+          </Box>
+          {stats.length > 0 && <Typography variant="caption" color="text.secondary" sx={{ display: 'block', mt: 0.25 }}>{stats.join(' · ')}</Typography>}
+        </Box>
+      </Box>
+      <Box sx={{ ml: '40px', mt: 1 }}>
+        <RunProcessBody items={entry.items} live={live} signal={signal} />
+      </Box>
+    </Box>
+  )
+}
+
+type SeqItem = { kind: 'thought'; text: string; at: string } | { kind: 'tool'; at: string; tool: ToolCallView }
+type RunBlock = { kind: 'process'; items: SeqItem[] } | { kind: 'message'; text: string } | { kind: 'plan'; entries: any[] }
+
+/** Run 过程：以输出消息为界切块；块内保留思考/工具的真实穿插顺序。 */
+function RunProcessBody({ items, live, signal }: { items: ProcessItem[]; live: boolean; signal: ExpandSignal }) {
+  const blocks = useMemo(() => {
+    const out: RunBlock[] = []
+    for (const it of items) {
+      if (it.kind === 'thought' || it.kind === 'tool') {
+        let last = out[out.length - 1]
+        if (!last || last.kind !== 'process') {
+          last = { kind: 'process', items: [] }
+          out.push(last)
+        }
+        last.items.push(it)
+      } else if (it.kind === 'message') {
+        out.push({ kind: 'message', text: it.text })
+      } else {
+        out.push({ kind: 'plan', entries: it.entries })
+      }
+    }
+    return out
+  }, [items])
+
+  if (blocks.length === 0) {
+    return <Typography variant="caption" color="text.secondary" sx={{ display: 'block' }}>该 Run 没有过程明细。</Typography>
+  }
+
+  return (
+    <Box sx={{ display: 'grid', gridTemplateColumns: 'minmax(0,1fr)', gap: 1.25 }}>
+      {blocks.map((b, i) => {
+        const isLast = i === blocks.length - 1
+        return b.kind === 'process'
+          ? <RunProcessSection key={i} items={b.items} live={live && isLast} signal={signal} />
+          : b.kind === 'message'
+            ? <RunOutputBlock key={i} text={b.text} live={live && isLast} />
+            : <RunPlanCard key={i} entries={b.entries} />
+      })}
+    </Box>
+  )
+}
+
+/** 执行过程：默认折叠；展开后按发生顺序交替展示思考与工具调用。 */
+function RunProcessSection({ items, live, signal }: { items: SeqItem[]; live: boolean; signal: ExpandSignal }) {
+  const [open, setOpen] = useState(false)
+  useEffect(() => { if (signal) setOpen(signal.open) }, [signal])
+  const segments = useMemo(() => {
+    const out: Array<{ kind: 'thought'; text: string } | { kind: 'tools'; tools: ToolCallView[] }> = []
+    for (const it of items) {
+      const last = out[out.length - 1]
+      if (it.kind === 'thought') {
+        if (last && last.kind === 'thought') last.text += '\n\n' + it.text
+        else out.push({ kind: 'thought', text: it.text })
+      } else if (last && last.kind === 'tools') {
+        last.tools.push(it.tool)
+      } else {
+        out.push({ kind: 'tools', tools: [it.tool] })
+      }
+    }
+    return out
+  }, [items])
+  const thoughtCount = segments.filter(s => s.kind === 'thought').length
+  const toolCount = items.length - thoughtCount
+  return (
+    <Box>
+      <Box onClick={() => setOpen(v => !v)} sx={{
+        display: 'inline-flex', alignItems: 'center', gap: 0.75, cursor: 'pointer',
+        color: 'text.secondary', py: 0.25, '&:hover': { color: 'text.primary' },
+      }}>
+        <PsychologyOutlinedIcon sx={{ fontSize: 15 }} />
+        <Typography variant="caption" fontWeight={650}>执行过程</Typography>
+        {thoughtCount > 0 && <Chip size="small" variant="outlined" label={`思考 ${thoughtCount} 段`} sx={{ height: 17, fontSize: 10 }} />}
+        {toolCount > 0 && <Chip size="small" variant="outlined" label={`工具 ${toolCount} 次`} sx={{ height: 17, fontSize: 10 }} />}
+        {live && <CircularProgress size={9} />}
+        <ExpandMoreIcon sx={{ fontSize: 16, transition: 'transform .15s', transform: open ? 'rotate(180deg)' : 'none' }} />
+      </Box>
+      <Collapse in={open} timeout="auto" unmountOnExit>
+        <Box sx={{ mt: 0.5, pl: 1.5, ml: 0.5, borderLeft: '2px solid', borderColor: 'divider', display: 'grid', gridTemplateColumns: 'minmax(0,1fr)', gap: 0.6 }}>
+          {segments.map((seg, i) => seg.kind === 'thought'
+            ? <RunThought key={i} text={seg.text} live={live && i === segments.length - 1} signal={signal} />
+            : <Box key={i} sx={{ display: 'grid', gridTemplateColumns: 'minmax(0,1fr)', gap: 0.3 }}>
+                {seg.tools.map((t, j) => <ToolRow key={t.id || j} tool={t} />)}
+              </Box>)}
+        </Box>
+      </Collapse>
+    </Box>
+  )
+}
+
+/** 单段思考：折叠时只显示首行摘要，展开后看全文。 */
+function RunThought({ text, live, signal }: { text: string; live: boolean; signal: ExpandSignal }) {
+  const [open, setOpen] = useState(false)
+  useEffect(() => { if (signal) setOpen(signal.open) }, [signal])
+  const preview = text.replace(/\s+/g, ' ').trim()
+  return (
+    <Box>
+      <Box onClick={() => setOpen(v => !v)} sx={{
+        display: 'flex', alignItems: 'center', gap: 0.5, cursor: 'pointer', minWidth: 0, overflow: 'hidden',
+        color: 'text.secondary', '&:hover': { color: 'text.primary' },
+      }}>
+        <LightbulbOutlinedIcon sx={{ fontSize: 14, flexShrink: 0 }} />
+        <Typography variant="caption" fontWeight={650} sx={{ flexShrink: 0 }}>思考</Typography>
+        <Typography variant="caption" color="text.secondary" sx={{ flexGrow: 1, minWidth: 0, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{preview}</Typography>
+        {live && <CircularProgress size={9} />}
+        <Typography variant="caption" color="text.disabled" sx={{ flexShrink: 0 }}>{fmtChars(text.length)}</Typography>
+        <ExpandMoreIcon sx={{ fontSize: 15, transition: 'transform .15s', transform: open ? 'rotate(180deg)' : 'none' }} />
+      </Box>
+      <Collapse in={open} timeout="auto" unmountOnExit>
+        <Box component="pre" sx={{
+          m: 0, mt: 0.5, pl: 1.25, borderLeft: '1px dashed', borderColor: 'divider',
+          fontFamily: 'inherit', fontSize: 12.5, lineHeight: 1.7, color: 'text.secondary',
+          whiteSpace: 'pre-wrap', wordBreak: 'break-word', maxHeight: 320, overflowY: 'auto',
+        }}>{text}</Box>
+      </Collapse>
+    </Box>
+  )
+}
+
+/** 智能体输出：始终完整展示（Markdown）。 */
+function RunOutputBlock({ text, live }: { text: string; live: boolean }) {
+  return (
+    <Box>
+      <Box sx={{ display: 'flex', alignItems: 'center', gap: 0.5, color: 'text.secondary', mb: 0.5 }}>
+        <SmartToyIcon sx={{ fontSize: 13 }} />
+        <Typography variant="caption" fontWeight={650}>智能体输出</Typography>
+        {live && <CircularProgress size={9} />}
+      </Box>
+      <Paper elevation={0} sx={{ p: 1.5, bgcolor: '#f5f6fa', borderRadius: 1.25 }}>
+        <Markdown text={text} />
+      </Paper>
+    </Box>
+  )
+}
+
+function RunPlanCard({ entries }: { entries: any[] }) {
+  if (entries.length === 0) return null
+  return (
+    <Paper elevation={0} sx={{ p: 1.25, bgcolor: 'background.paper', border: '1px solid', borderColor: 'divider', borderRadius: 1.25 }}>
+      {entries.map((e: any, j: number) => (
+        <Box key={j} sx={{ display: 'flex', alignItems: 'center', gap: 0.75, py: 0.2 }}>
+          {e.status === 'completed' ? <CheckCircleIcon sx={{ fontSize: 15, color: 'success.main' }} /> : e.status === 'in_progress' ? <AutorenewIcon sx={{ fontSize: 15, color: 'primary.main' }} /> : <RadioButtonUncheckedIcon sx={{ fontSize: 15, color: 'text.disabled' }} />}
+          <Typography variant="body2">{e.content}</Typography>
+        </Box>
+      ))}
+    </Paper>
   )
 }
 

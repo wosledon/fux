@@ -5,8 +5,6 @@ import {
   Box, Button, Chip, CircularProgress, Divider, IconButton, Paper, Stack, TextField,
   Tooltip, Typography, ListItemButton, Dialog, DialogTitle, DialogContent, DialogActions, MenuItem, Alert, Collapse,
 } from '@mui/material'
-import ReactMarkdown from 'react-markdown'
-import remarkGfm from 'remark-gfm'
 import AddCommentOutlinedIcon from '@mui/icons-material/AddCommentOutlined'
 import SmartToyOutlinedIcon from '@mui/icons-material/SmartToyOutlined'
 import SendRoundedIcon from '@mui/icons-material/SendRounded'
@@ -23,16 +21,12 @@ import SettingsOutlinedIcon from '@mui/icons-material/SettingsOutlined'
 import PsychologyOutlinedIcon from '@mui/icons-material/PsychologyOutlined'
 import ExpandMoreIcon from '@mui/icons-material/ExpandMore'
 import BuildOutlinedIcon from '@mui/icons-material/BuildOutlined'
-import EditOutlinedIcon from '@mui/icons-material/EditOutlined'
-import DescriptionOutlinedIcon from '@mui/icons-material/DescriptionOutlined'
-import TerminalIcon from '@mui/icons-material/Terminal'
-import SearchIcon from '@mui/icons-material/Search'
 import {
   API, get, patch, del, getToken, parseJson,
   type AssistantSession, type AssistantMessage, type Agent, type Board, type Task, type TaskStatus, type CliEntry,
 } from '../api'
 import { useAuth } from '../auth'
-import { StatusChip, useConfirm, useToast } from '../ui'
+import { Markdown, StatusChip, ToolRow, useConfirm, useToast, type ToolCallView } from '../ui'
 import type { WsCtx } from './WorkspaceLayout'
 
 interface ChatMsg {
@@ -42,8 +36,6 @@ interface ChatMsg {
   tools?: ToolCallView[]
   createdAt?: string
 }
-
-interface ToolCallView { id: string; title: string; status: string; kind?: string; detail?: string }
 
 const SUGGESTIONS = [
   '汇总当前看板进展',
@@ -733,44 +725,6 @@ function TypingDots() {
   )
 }
 
-function Markdown({ text }: { text: string }) {
-  return (
-    <Box sx={{
-      fontSize: 14, lineHeight: 1.75, wordBreak: 'break-word', color: 'text.primary',
-      '& > :first-of-type': { mt: 0 },
-      '& > :last-child': { mb: 0 },
-      '& p': { my: 1 },
-      '& h1, & h2, & h3, & h4': { fontWeight: 700, mt: 2, mb: 1, lineHeight: 1.4 },
-      '& h1': { fontSize: 22 },
-      '& h2': { fontSize: 18 },
-      '& h3': { fontSize: 16 },
-      '& h4': { fontSize: 14.5 },
-      '& ul, & ol': { pl: 3, my: 1 },
-      '& li': { my: 0.35 },
-      '& li > p': { my: 0.25 },
-      '& blockquote': { borderLeft: '3px solid', borderColor: 'divider', pl: 1.5, color: 'text.secondary', my: 1, ml: 0 },
-      '& a': { color: 'primary.main', textDecoration: 'none', '&:hover': { textDecoration: 'underline' } },
-      '& hr': { border: 0, borderTop: '1px solid', borderColor: 'divider', my: 2 },
-      '& table': { borderCollapse: 'collapse', width: '100%', my: 1.5, fontSize: 13, display: 'block', overflowX: 'auto' },
-      '& th, & td': { border: '1px solid', borderColor: 'divider', px: 1, py: 0.5, textAlign: 'left' },
-      '& th': { bgcolor: '#f7f8fb', fontWeight: 700 },
-      '& code': { px: 0.5, py: 0.1, borderRadius: 0.5, bgcolor: 'rgba(29,36,58,0.07)', fontFamily: 'ui-monospace, SFMono-Regular, Menlo, monospace', fontSize: '0.92em' },
-      '& pre': { bgcolor: '#0f172a', color: '#e2e8f0', p: 1.5, borderRadius: 1, overflowX: 'auto', my: 1.25, lineHeight: 1.6 },
-      '& pre code': { bgcolor: 'transparent', color: 'inherit', p: 0, fontSize: 12.5, fontFamily: 'ui-monospace, SFMono-Regular, Menlo, monospace' },
-    }}>
-      <ReactMarkdown remarkPlugins={[remarkGfm]}>{text}</ReactMarkdown>
-    </Box>
-  )
-}
-
-const TOOL_STATUS: Record<string, string> = {
-  pending: '等待',
-  in_progress: '执行中',
-  running: '执行中',
-  completed: '完成',
-  failed: '失败',
-}
-
 function ProcessBlock({ thoughts, tools, live }: { thoughts: string; tools: ToolCallView[]; live: boolean }) {
   const [open, setOpen] = useState(live)
   useEffect(() => { if (live) setOpen(true) }, [live])
@@ -821,43 +775,6 @@ function ProcessBlock({ thoughts, tools, live }: { thoughts: string; tools: Tool
           )}
         </Box>
       </Collapse>
-    </Box>
-  )
-}
-
-function ToolIcon({ kind }: { kind?: string }) {
-  const sx = { fontSize: 14 }
-  switch (kind) {
-    case 'edit': return <EditOutlinedIcon sx={sx} />
-    case 'read': return <DescriptionOutlinedIcon sx={sx} />
-    case 'execute': return <TerminalIcon sx={sx} />
-    case 'search': return <SearchIcon sx={sx} />
-    default: return <BuildOutlinedIcon sx={sx} />
-  }
-}
-
-const TOOL_TITLE_ALIAS: Record<string, string> = {
-  execute: '执行命令',
-  read: '读取文件',
-  edit: '编辑文件',
-  search: '搜索',
-  fetch: '请求数据',
-  think: '思考',
-  other: '工具',
-}
-
-function ToolRow({ tool }: { tool: ToolCallView }) {
-  const color = tool.status === 'completed' ? 'success.main' : tool.status === 'failed' ? 'error.main' : 'primary.main'
-  const title = tool.title ? (TOOL_TITLE_ALIAS[tool.title] || tool.title) : '工具'
-  const label = tool.detail ? `${title} · ${tool.detail}` : title
-  return (
-    <Box sx={{ display: 'flex', alignItems: 'center', gap: 0.75 }}>
-      <Box sx={{ color: 'text.disabled', display: 'flex', flexShrink: 0 }}><ToolIcon kind={tool.kind} /></Box>
-      <Typography variant="caption" sx={{ flexGrow: 1, minWidth: 0, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
-        {label}
-      </Typography>
-      <Box component="span" sx={{ width: 6, height: 6, borderRadius: '50%', bgcolor: color, flexShrink: 0 }} />
-      <Typography variant="caption" sx={{ color, flexShrink: 0 }}>{TOOL_STATUS[tool.status] || tool.status}</Typography>
     </Box>
   )
 }
