@@ -1,4 +1,4 @@
-//! AI 工作助理（FR-03）：绑定 CLI 的智能体 + 内置 workspace MCP，SSE 流式回复。
+//! AI 工作助理（FR-03）：多会话对话，绑定 CLI 的智能体 + 内置 workspace MCP，SSE 流式回复。
 use crate::acp::AcpClient;
 use crate::server::SharedState;
 use crate::server::auth::{AuthUser, issue_token, require};
@@ -7,14 +7,249 @@ use crate::server::models::{Agent, CliEntry, Workspace};
 use actix_web::{HttpResponse, web};
 use serde::Deserialize;
 use serde_json::{Value, json};
+use std::collections::BTreeMap;
 use std::sync::Arc;
 use tokio::sync::{Mutex, mpsc};
+
+/// 旧版本没有会话概念的消息统一归入一个「历史对话」。
+async fn backfill_legacy(state: &SharedState, ws_id: &str) -> ApiResult<()> {
+    let n: i64 = sqlx::query_scalar(
+        "SELECT COUNT(*) FROM assistant_messages WHERE workspace_id = ? AND session_id IS NULL",
+    )
+    .bind(ws_id)
+    .fetch_one(&state.db)
+    .await
+    .unwrap_or(0);
+    if n == 0 {
+        return Ok(());
+    }
+    let sid = crate::new_id();
+    sqlx::query(
+        "INSERT INTO assistant_sessions (id, workspace_id, title) VALUES (?,?, '历史对话')",
+    )
+    .bind(&sid)
+    .bind(ws_id)
+    .execute(&state.db)
+    .await?;
+    sqlx::query(
+        "UPDATE assistant_messages SET session_id = ? WHERE workspace_id = ? AND session_id IS NULL",
+    )
+    .bind(&sid)
+    .bind(ws_id)
+    .execute(&state.db)
+    .await?;
+    Ok(())
+}
+
+async fn list_sessions(
+    state: SharedState,
+    user: AuthUser,
+    path: web::Path<String>,
+) -> ApiResult<HttpResponse> {
+    let ws_id = path.into_inner();
+    require(&state.db, &ws_id, &user.id, "member").await?;
+    backfill_legacy(&state, &ws_id).await?;
+    let rows = sqlx::query_as::<_, (String, String, String, String, i64, Option<String>)>(
+        "SELECT s.id, s.title, s.created_at, s.updated_at,
+                (SELECT COUNT(*) FROM assistant_messages m WHERE m.session_id = s.id),
+                (SELECT content FROM assistant_messages m WHERE m.session_id = s.id ORDER BY m.id DESC LIMIT 1)
+         FROM assistant_sessions s WHERE s.workspace_id = ? ORDER BY s.updated_at DESC",
+    )
+    .bind(&ws_id)
+    .fetch_all(&state.db)
+    .await?;
+    let out: Vec<Value> = rows
+        .into_iter()
+        .map(|(id, title, created_at, updated_at, count, preview)| {
+            json!({
+                "id": id, "title": title, "createdAt": created_at, "updatedAt": updated_at,
+                "messageCount": count,
+                "preview": preview.map(|p| p.chars().take(60).collect::<String>()),
+            })
+        })
+        .collect();
+    Ok(HttpResponse::Ok().json(out))
+}
+
+async fn session_messages(
+    state: SharedState,
+    user: AuthUser,
+    path: web::Path<String>,
+) -> ApiResult<HttpResponse> {
+    let sid = path.into_inner();
+    let ws_id: String =
+        sqlx::query_scalar("SELECT workspace_id FROM assistant_sessions WHERE id = ?")
+            .bind(&sid)
+            .fetch_optional(&state.db)
+            .await?
+            .ok_or_else(|| ApiError::not_found("会话不存在"))?;
+    require(&state.db, &ws_id, &user.id, "member").await?;
+    let rows = sqlx::query_as::<_, (i64, String, String, String)>(
+        "SELECT id, role, content, created_at FROM assistant_messages WHERE session_id = ? ORDER BY id",
+    )
+    .bind(&sid)
+    .fetch_all(&state.db)
+    .await?;
+    let out: Vec<Value> = rows
+        .into_iter()
+        .map(|(id, role, content, created_at)| {
+            json!({ "id": id, "role": role, "content": content, "createdAt": created_at })
+        })
+        .collect();
+    Ok(HttpResponse::Ok().json(out))
+}
+
+#[derive(Deserialize)]
+struct RenameReq {
+    title: String,
+}
+
+async fn rename_session(
+    state: SharedState,
+    user: AuthUser,
+    path: web::Path<String>,
+    body: web::Json<RenameReq>,
+) -> ApiResult<HttpResponse> {
+    let sid = path.into_inner();
+    let ws_id: String =
+        sqlx::query_scalar("SELECT workspace_id FROM assistant_sessions WHERE id = ?")
+            .bind(&sid)
+            .fetch_optional(&state.db)
+            .await?
+            .ok_or_else(|| ApiError::not_found("会话不存在"))?;
+    require(&state.db, &ws_id, &user.id, "member").await?;
+    let title = body.title.trim();
+    if title.is_empty() {
+        return Err(ApiError::bad_request("标题不能为空"));
+    }
+    sqlx::query("UPDATE assistant_sessions SET title = ?, updated_at = ? WHERE id = ?")
+        .bind(title.chars().take(60).collect::<String>())
+        .bind(crate::now())
+        .bind(&sid)
+        .execute(&state.db)
+        .await?;
+    Ok(HttpResponse::Ok().json(json!({ "ok": true })))
+}
+
+async fn delete_session(
+    state: SharedState,
+    user: AuthUser,
+    path: web::Path<String>,
+) -> ApiResult<HttpResponse> {
+    let sid = path.into_inner();
+    let ws_id: String =
+        sqlx::query_scalar("SELECT workspace_id FROM assistant_sessions WHERE id = ?")
+            .bind(&sid)
+            .fetch_optional(&state.db)
+            .await?
+            .ok_or_else(|| ApiError::not_found("会话不存在"))?;
+    require(&state.db, &ws_id, &user.id, "member").await?;
+    sqlx::query("DELETE FROM assistant_messages WHERE session_id = ?")
+        .bind(&sid)
+        .execute(&state.db)
+        .await?;
+    sqlx::query("DELETE FROM assistant_sessions WHERE id = ?")
+        .bind(&sid)
+        .execute(&state.db)
+        .await?;
+    Ok(HttpResponse::Ok().json(json!({ "ok": true })))
+}
 
 #[derive(Deserialize)]
 #[serde(rename_all = "camelCase")]
 struct ChatReq {
     workspace_id: String,
     message: String,
+    session_id: Option<String>,
+}
+
+fn session_title(message: &str) -> String {
+    let one_line = message.split_whitespace().collect::<Vec<_>>().join(" ");
+    let mut t: String = one_line.chars().take(24).collect();
+    if one_line.chars().count() > 24 {
+        t.push('…');
+    }
+    if t.is_empty() { "新对话".into() } else { t }
+}
+
+/// 工作区上下文：统计 + 重点任务 + 项目/智能体，供助理回答与调用 MCP 时参考。
+async fn build_context(state: &SharedState, ws: &Workspace) -> String {
+    let stats = sqlx::query_as::<_, (String, i64)>(
+        "SELECT status, COUNT(*) FROM tasks WHERE workspace_id = ? GROUP BY status",
+    )
+    .bind(&ws.id)
+    .fetch_all(&state.db)
+    .await
+    .unwrap_or_default();
+    let stat_map: BTreeMap<String, i64> = stats.into_iter().collect();
+
+    let tasks = sqlx::query_as::<_, (String, String, String, i64)>(
+        "SELECT title, status, COALESCE(project_id, ''), priority FROM tasks
+         WHERE workspace_id = ? AND status NOT IN ('archived','cancelled')
+         ORDER BY CASE status WHEN 'blocked' THEN 0 WHEN 'review' THEN 1 WHEN 'in_progress' THEN 2 ELSE 3 END,
+                  priority DESC, updated_at DESC LIMIT 30",
+    )
+    .bind(&ws.id)
+    .fetch_all(&state.db)
+    .await
+    .unwrap_or_default();
+
+    let projects = sqlx::query_as::<_, (String, String)>(
+        "SELECT name, kind FROM projects WHERE workspace_id = ? ORDER BY name",
+    )
+    .bind(&ws.id)
+    .fetch_all(&state.db)
+    .await
+    .unwrap_or_default();
+
+    let agents = sqlx::query_as::<_, (String, String)>(
+        "SELECT name, model FROM agents WHERE workspace_id = ? ORDER BY name",
+    )
+    .bind(&ws.id)
+    .fetch_all(&state.db)
+    .await
+    .unwrap_or_default();
+
+    let mut ctx = format!(
+        "当前时间: {}\n工作区: {}\n任务统计: {:?}\n",
+        crate::now(),
+        ws.name,
+        stat_map
+    );
+    if !projects.is_empty() {
+        ctx.push_str(&format!(
+            "项目: {}\n",
+            projects
+                .iter()
+                .map(|(n, k)| format!("{n}({k})"))
+                .collect::<Vec<_>>()
+                .join("、")
+        ));
+    }
+    if !agents.is_empty() {
+        ctx.push_str(&format!(
+            "智能体: {}\n",
+            agents
+                .iter()
+                .map(|(n, m)| if m.is_empty() {
+                    n.clone()
+                } else {
+                    format!("{n}[{m}]")
+                })
+                .collect::<Vec<_>>()
+                .join("、")
+        ));
+    }
+    ctx.push_str("任务（优先展示阻塞/审核/进行中）:\n");
+    for (title, status, project_id, priority) in tasks {
+        let proj = if project_id.is_empty() {
+            String::new()
+        } else {
+            format!(" project={project_id}")
+        };
+        ctx.push_str(&format!("- [{status}] {title} (P{priority}{proj})\n"));
+    }
+    ctx
 }
 
 async fn chat(
@@ -28,6 +263,12 @@ async fn chat(
         .bind(&ws_id)
         .fetch_one(&state.db)
         .await?;
+    let message = body.message.trim().to_string();
+    if message.is_empty() {
+        return Err(ApiError::bad_request("消息不能为空"));
+    }
+
+    // 助理智能体：工作区设置优先，否则第一个智能体
     let settings: Value = serde_json::from_str(&ws.settings).unwrap_or(json!({}));
     let agent = match settings.get("assistantAgentId").and_then(|v| v.as_str()) {
         Some(id) => {
@@ -52,40 +293,73 @@ async fn chat(
         .fetch_one(&state.db)
         .await?;
 
-    // 工作区上下文
-    let stats = sqlx::query_as::<_, (String, i64)>(
-        "SELECT status, COUNT(*) FROM tasks WHERE workspace_id = ? GROUP BY status",
-    )
-    .bind(&ws_id)
-    .fetch_all(&state.db)
-    .await
-    .unwrap_or_default();
-    let doing = sqlx::query_scalar::<_, String>(
-        "SELECT title FROM tasks WHERE workspace_id = ? AND status = 'in_progress' LIMIT 10",
-    )
-    .bind(&ws_id)
-    .fetch_all(&state.db)
-    .await
-    .unwrap_or_default();
-    let context = format!(
-        "工作区「{}」看板统计: {:?}；进行中任务: {:?}",
-        ws.name, stats, doing
-    );
+    // 会话：未指定则创建，标题取首条消息
+    let (session_id, title) = match &body.session_id {
+        Some(sid) => {
+            let row: Option<(String, String)> =
+                sqlx::query_as("SELECT workspace_id, title FROM assistant_sessions WHERE id = ?")
+                    .bind(sid)
+                    .fetch_optional(&state.db)
+                    .await?;
+            let (owner, title) = row.ok_or_else(|| ApiError::not_found("会话不存在"))?;
+            if owner != ws_id {
+                return Err(ApiError::forbidden("会话不属于该工作区"));
+            }
+            (sid.clone(), title)
+        }
+        None => {
+            let sid = crate::new_id();
+            let title = session_title(&message);
+            sqlx::query("INSERT INTO assistant_sessions (id, workspace_id, title) VALUES (?,?,?)")
+                .bind(&sid)
+                .bind(&ws_id)
+                .bind(&title)
+                .execute(&state.db)
+                .await?;
+            (sid, title)
+        }
+    };
 
-    let history = sqlx::query_as::<_, (String, String)>("SELECT role, content FROM assistant_messages WHERE workspace_id = ? ORDER BY id DESC LIMIT 16")
-        .bind(&ws_id).fetch_all(&state.db).await.unwrap_or_default();
+    // 历史（仅当前会话），先取历史再落库当前消息
+    let history = sqlx::query_as::<_, (String, String)>(
+        "SELECT role, content FROM assistant_messages WHERE session_id = ? ORDER BY id DESC LIMIT 20",
+    )
+    .bind(&session_id)
+    .fetch_all(&state.db)
+    .await
+    .unwrap_or_default();
+
+    // 先落用户消息，断线也不丢
+    sqlx::query("INSERT INTO assistant_messages (workspace_id, session_id, role, content) VALUES (?,?, 'user', ?)")
+        .bind(&ws_id)
+        .bind(&session_id)
+        .bind(&message)
+        .execute(&state.db)
+        .await?;
+    sqlx::query("UPDATE assistant_sessions SET updated_at = ? WHERE id = ?")
+        .bind(crate::now())
+        .bind(&session_id)
+        .execute(&state.db)
+        .await?;
+
+    let context = build_context(&state, &ws).await;
     let mut prompt = format!(
-        "你是 Fux 工作区助理。{context}\n\n你可以通过 fux-workspace MCP 工具操作工作台（创建/移动任务、评论、查询）。回答简洁。\n\n"
+        "你是 Fux 工作区助理，用简体中文回答，尽量简洁并使用 Markdown。\n\
+         你可以通过 fux-workspace MCP 工具查询/创建/移动任务与评论。执行写操作前先说明将要做什么。\n\n\
+         ## 工作区上下文\n{context}\n"
     );
     for (role, content) in history.iter().rev() {
         prompt.push_str(&format!("{role}: {content}\n"));
     }
-    prompt.push_str(&format!("user: {}\n", body.message));
+    prompt.push_str(&format!("user: {message}\nassistant:"));
 
-    let cwd = state.data_dir.join("assistant").join(&ws_id);
+    let cwd = state
+        .data_dir
+        .join("assistant")
+        .join(&ws_id)
+        .join(&session_id);
     tokio::fs::create_dir_all(&cwd).await.ok();
 
-    // 内置 workspace MCP（若 fux-mcp 已构建/安装）
     let mut mcp = vec![];
     if which::which("fux-mcp").is_ok() {
         let token = issue_token(&state.jwt_secret, &user.id, &user.username)?;
@@ -99,8 +373,7 @@ async fn chat(
         }));
     }
 
-    let args: Vec<String> = serde_json::from_str(&cli.args).unwrap_or_default();
-    let mut args = args;
+    let mut args: Vec<String> = serde_json::from_str(&cli.args).unwrap_or_default();
     if cli.kind == "copilot" {
         args.push(format!(
             "--effort={}",
@@ -115,17 +388,21 @@ async fn chat(
                     .collect()
             })
             .unwrap_or_default();
-    let system_prompt = agent.system_prompt.clone();
-    let full_prompt = if system_prompt.is_empty() {
+    let full_prompt = if agent.system_prompt.is_empty() {
         prompt
     } else {
-        format!("{system_prompt}\n\n{prompt}")
+        format!("{}\n\n{prompt}", agent.system_prompt)
     };
 
     let (tx, mut rx) = mpsc::unbounded_channel::<String>();
+    let _ = tx.send(format!(
+        "data: {}\n\n",
+        json!({ "type": "session", "sessionId": session_id, "title": title })
+    ));
+
     let db = state.db.clone();
+    let sid2 = session_id.clone();
     let ws_id2 = ws_id.clone();
-    let user_msg = body.message.clone();
     tokio::spawn(async move {
         let answer = Arc::new(Mutex::new(String::new()));
         let result: anyhow::Result<()> = async {
@@ -133,9 +410,8 @@ async fn chat(
             let mut updates = client.take_updates();
             let mut requests = client.take_requests();
             client.initialize().await?;
-            let sid = client.new_session(&cwd, mcp).await?;
+            let acp_sid = client.new_session(&cwd, mcp).await?;
             let client = Arc::new(client);
-            // pump 只处理权限等 agent→client 请求；消息分片在等待 prompt 期间内联消费
             let pump = {
                 let client = client.clone();
                 tokio::spawn(async move {
@@ -160,17 +436,13 @@ async fn chat(
                 if u.pointer("/update/sessionUpdate").and_then(|k| k.as_str()) == Some("agent_message_chunk") {
                     if let Some(text) = u.pointer("/update/content/text").and_then(|t| t.as_str()) {
                         let text = text.to_string();
-                        let answer = answer.clone();
-                        let line = format!("data: {}\n\n", json!({ "type": "chunk", "text": text }));
-                        let tx = tx.clone();
-                        // 同步累积 + 发送（避免异步闭包复杂度）
                         if let Ok(mut guard) = answer.try_lock() { guard.push_str(&text); }
-                        let _ = tx.send(line);
+                        let _ = tx.send(format!("data: {}\n\n", json!({ "type": "chunk", "text": text })));
                     }
                 }
             };
             let resp = {
-                let fut = client.prompt(&sid, &full_prompt);
+                let fut = client.prompt(&acp_sid, &full_prompt);
                 tokio::pin!(fut);
                 loop {
                     tokio::select! {
@@ -186,16 +458,12 @@ async fn chat(
             Ok(())
         }.await;
         let answer_text = answer.lock().await.clone();
-        let _ = sqlx::query(
-            "INSERT INTO assistant_messages (workspace_id, role, content) VALUES (?, 'user', ?)",
-        )
-        .bind(&ws_id2)
-        .bind(&user_msg)
-        .execute(&db)
-        .await;
         if !answer_text.is_empty() {
-            let _ = sqlx::query("INSERT INTO assistant_messages (workspace_id, role, content) VALUES (?, 'assistant', ?)")
-                .bind(&ws_id2).bind(&answer_text).execute(&db).await;
+            let _ = sqlx::query("INSERT INTO assistant_messages (workspace_id, session_id, role, content) VALUES (?,?, 'assistant', ?)")
+                .bind(&ws_id2)
+                .bind(&sid2)
+                .bind(&answer_text)
+                .execute(&db).await;
         }
         match result {
             Ok(_) => {
@@ -222,5 +490,15 @@ async fn chat(
 }
 
 pub fn routes(cfg: &mut web::ServiceConfig) {
-    cfg.route("/assistant/chat", web::post().to(chat));
+    cfg.route(
+        "/workspaces/{id}/assistant/sessions",
+        web::get().to(list_sessions),
+    )
+    .route(
+        "/assistant/sessions/{id}/messages",
+        web::get().to(session_messages),
+    )
+    .route("/assistant/sessions/{id}", web::patch().to(rename_session))
+    .route("/assistant/sessions/{id}", web::delete().to(delete_session))
+    .route("/assistant/chat", web::post().to(chat));
 }

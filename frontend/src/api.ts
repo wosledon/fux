@@ -88,6 +88,12 @@ export interface Notification {
   message: string; readBy: string; createdAt: string
 }
 export interface NotificationItem { notification: Notification; read: boolean }
+export interface AssistantSession {
+  id: string; title: string; createdAt: string; updatedAt: string; messageCount: number; preview?: string
+}
+export interface AssistantMessage {
+  id: number; role: 'user' | 'assistant'; content: string; createdAt: string
+}
 
 export const STATUS_LABEL: Record<TaskStatus, string> = {
   planning: '待规划', ready: '待办', in_progress: '进行中', review: '审核中',

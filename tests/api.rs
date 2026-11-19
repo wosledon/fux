@@ -76,6 +76,21 @@ fn auth(req: actix_web::test::TestRequest, token: &str) -> actix_web::test::Test
     req.insert_header(("Authorization", format!("Bearer {token}")))
 }
 
+async fn call_text<S, B>(app: &S, req: actix_web::test::TestRequest) -> (u16, String)
+where
+    S: actix_web::dev::Service<
+            actix_http::Request,
+            Response = actix_web::dev::ServiceResponse<B>,
+            Error = actix_web::Error,
+        >,
+    B: actix_web::body::MessageBody,
+{
+    let resp = test::call_service(app, req.to_request()).await;
+    let status = resp.status().as_u16();
+    let body = test::read_body(resp).await;
+    (status, String::from_utf8_lossy(&body).to_string())
+}
+
 async fn create_ws<S, B>(app: &S, token: &str) -> (String, String)
 where
     S: actix_web::dev::Service<
@@ -880,4 +895,144 @@ async fn watchdog_loop_trip() {
         .map(|e| e.kind)
         .collect();
     assert!(kinds.contains(&"watchdog.loop".to_string()));
+}
+
+/// AI 助理：多会话 CRUD + mock 智能体流式对话。
+#[actix_web::test]
+async fn assistant_sessions_and_chat() {
+    let ctx = setup().await;
+    let app = app!(ctx);
+    let owner = register(&app, "assistant-owner").await;
+    let (ws, _board) = create_ws(&app, &owner).await;
+
+    // 无智能体：拒绝且不产生会话
+    let (s, _) = call(
+        &app,
+        auth(
+            test::TestRequest::post()
+                .uri("/api/v1/assistant/chat")
+                .set_json(json!({ "workspaceId": ws, "message": "你好" })),
+            &owner,
+        ),
+    )
+    .await;
+    assert_eq!(s, 400, "没有智能体时应提示先创建");
+    let (s, v) = call(
+        &app,
+        auth(
+            test::TestRequest::get().uri(&format!("/api/v1/workspaces/{ws}/assistant/sessions")),
+            &owner,
+        ),
+    )
+    .await;
+    assert_eq!(s, 200);
+    assert_eq!(v.as_array().unwrap().len(), 0, "失败请求不应留下空会话");
+
+    // mock 智能体
+    let mock_bin = env!("CARGO_BIN_EXE_fux-mock-agent");
+    let (_, cli) = call(
+        &app,
+        auth(
+            test::TestRequest::post()
+                .uri("/api/v1/cli-entries")
+                .set_json(json!({ "workspaceId": ws, "name": "MockAssistant", "command": mock_bin, "args": [] })),
+            &owner,
+        ),
+    )
+    .await;
+    let (s, _) = call(
+        &app,
+        auth(
+            test::TestRequest::post()
+                .uri(&format!("/api/v1/workspaces/{ws}/agents"))
+                .set_json(
+                    json!({ "name": "助理", "cliEntryId": cli["id"], "policy": "full_auto" }),
+                ),
+            &owner,
+        ),
+    )
+    .await;
+    assert_eq!(s, 200);
+
+    // 流式对话：首个事件返回 session
+    let (s, body) = call_text(
+        &app,
+        auth(
+            test::TestRequest::post()
+                .uri("/api/v1/assistant/chat")
+                .set_json(json!({ "workspaceId": ws, "message": "总结当前看板" })),
+            &owner,
+        ),
+    )
+    .await;
+    assert_eq!(s, 200, "chat: {body}");
+    assert!(body.contains("\"type\":\"chunk\""), "应有流式分片: {body}");
+    let first = body
+        .lines()
+        .find(|l| l.starts_with("data: "))
+        .expect("缺少 SSE 事件");
+    let ev: Value = serde_json::from_str(first.trim_start_matches("data: ")).unwrap();
+    let sid = ev["sessionId"]
+        .as_str()
+        .expect("缺少 sessionId")
+        .to_string();
+
+    // 会话列表与消息
+    let (s, v) = call(
+        &app,
+        auth(
+            test::TestRequest::get().uri(&format!("/api/v1/workspaces/{ws}/assistant/sessions")),
+            &owner,
+        ),
+    )
+    .await;
+    assert_eq!(s, 200);
+    let list = v.as_array().unwrap();
+    assert_eq!(list.len(), 1);
+    assert_eq!(list[0]["id"].as_str(), Some(sid.as_str()));
+    assert!(list[0]["messageCount"].as_i64().unwrap_or(0) >= 2);
+
+    let (s, v) = call(
+        &app,
+        auth(
+            test::TestRequest::get().uri(&format!("/api/v1/assistant/sessions/{sid}/messages")),
+            &owner,
+        ),
+    )
+    .await;
+    assert_eq!(s, 200);
+    let msgs = v.as_array().unwrap();
+    assert_eq!(msgs[0]["role"], "user");
+    assert!(msgs.iter().any(|m| m["role"] == "assistant"));
+
+    // 重命名与删除
+    let (s, _) = call(
+        &app,
+        auth(
+            test::TestRequest::patch()
+                .uri(&format!("/api/v1/assistant/sessions/{sid}"))
+                .set_json(json!({ "title": "看板总结" })),
+            &owner,
+        ),
+    )
+    .await;
+    assert_eq!(s, 200);
+    let (s, _) = call(
+        &app,
+        auth(
+            test::TestRequest::delete().uri(&format!("/api/v1/assistant/sessions/{sid}")),
+            &owner,
+        ),
+    )
+    .await;
+    assert_eq!(s, 200);
+    let (_, v) = call(
+        &app,
+        auth(
+            test::TestRequest::get().uri(&format!("/api/v1/workspaces/{ws}/assistant/sessions")),
+            &owner,
+        ),
+    )
+    .await;
+    assert_eq!(v.as_array().unwrap().len(), 0);
 }
