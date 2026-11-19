@@ -115,11 +115,23 @@ async fn finish_inner(
     outcome: RunOutcome,
     remote: Option<(bool, Option<String>)>,
 ) -> ApiResult<()> {
-    let run = sqlx::query_as::<_, Run>("SELECT * FROM runs WHERE id = ?")
+    // 任务可能在 Run 执行期间被删除，runs 会随任务级联删除；此时结束回调直接忽略
+    let Some(run) = sqlx::query_as::<_, Run>("SELECT * FROM runs WHERE id = ?")
         .bind(run_id)
-        .fetch_one(&state.db)
-        .await?;
-    let task = domain::load_task(state, &run.task_id).await?;
+        .fetch_optional(&state.db)
+        .await?
+    else {
+        tracing::debug!("忽略已删除 Run {run_id} 的结束回调");
+        return Ok(());
+    };
+    let Some(task) = sqlx::query_as::<_, Task>("SELECT * FROM tasks WHERE id = ?")
+        .bind(&run.task_id)
+        .fetch_optional(&state.db)
+        .await?
+    else {
+        tracing::debug!("忽略已删除任务 {} 的 Run {run_id} 结束回调", run.task_id);
+        return Ok(());
+    };
     // 工作流：先完成本节点交付（commit/push），再落 Run 状态，避免 DAG 引擎提前收敛
     if task.workflow_id.is_some() {
         let head_from_remote = remote.as_ref().and_then(|(_, h)| h.clone());
@@ -443,4 +455,41 @@ pub fn spawn_merge_checker(state: SharedState) {
             }
         }
     });
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::server::{AppState, NodeRegistry};
+    use std::collections::HashMap;
+    use tokio::sync::{Mutex, broadcast};
+
+    #[tokio::test]
+    async fn finish_run_ignores_deleted_run() {
+        let dir = tempfile::tempdir().unwrap();
+        let db = crate::server::db::init(dir.path()).await.unwrap();
+        let (broadcast, _) = broadcast::channel(8);
+        let state = actix_web::web::Data::new(AppState {
+            db,
+            jwt_secret: "test".into(),
+            data_dir: dir.path().to_path_buf(),
+            broadcast,
+            nodes: NodeRegistry::default(),
+            local_runs: Mutex::new(HashMap::new()),
+            api_base: "http://127.0.0.1:0".into(),
+        });
+        let outcome = RunOutcome {
+            status: "finished".into(),
+            stop_reason: String::new(),
+            turn_count: 0,
+            session_id: String::new(),
+            error: None,
+        };
+        // 任务被删除时 runs 已级联删除，迟到的 Run 结束回调应被忽略而不是报错
+        assert!(
+            finish_inner(&state, "missing-run", outcome, None)
+                .await
+                .is_ok()
+        );
+    }
 }

@@ -6,7 +6,7 @@
 
 ```powershell
 cargo build            # 产出 fux / fux-runtime / fux-mock-agent / fux-mcp
-cargo test             # 14 个测试（7 单元 + 7 集成）；e2e 需要 git 在 PATH，且会真实拉起 mock agent 子进程
+cargo test             # 15 个测试（8 单元 + 7 集成）；e2e 需要 git 在 PATH，且会真实拉起 mock agent 子进程
 cargo test --test api e2e_mock_agent_delivery -- --nocapture   # 只跑一个集成测试
 cargo test --lib transition_table                              # 只跑 lib 单测
 cd frontend; npm run build    # tsc 双检 + vite build（无 lint 脚本，类型检查是唯一门禁）
