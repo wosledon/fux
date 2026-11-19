@@ -858,7 +858,7 @@ async fn watchdog_loop_trip() {
     .await;
     let tid = task["id"].as_str().unwrap().to_string();
 
-    // 伪造运行中状态 + 5 次相同工具调用
+    // 伪造运行中状态 + 相同工具调用
     let run_id = fux::new_id();
     sqlx::query("UPDATE tasks SET status = 'in_progress', lease_run_id = ?, lease_expires_at = ? WHERE id = ?")
         .bind(&run_id).bind(fux::server::gitflow::lease_deadline()).bind(&tid).execute(&ctx.state.db).await.unwrap();
@@ -875,6 +875,18 @@ async fn watchdog_loop_trip() {
     sqlx::query("INSERT INTO runs (id, task_id, agent_id, node_id, status, last_event_at) VALUES (?,?,?,?, 'running', ?)")
         .bind(&run_id).bind(&tid).bind(&agent_id).bind("local").bind(fux::now()).execute(&ctx.state.db).await.unwrap();
     for i in 0..5 {
+        fux::server::events::append(&ctx.state.db, &ctx.state.broadcast, &tid, "tool.call", "agent:x", Some(&run_id),
+            json!({ "toolCallId": format!("c{i}"), "title": "读同一文件", "kind": "read", "rawInput": { "path": "same.txt" } })).await.unwrap();
+    }
+
+    // 5 次不再触发（给“重复确认/重读文件”留余量）
+    watchdog::scan_once(&ctx.state).await.unwrap();
+    let t = fux::server::domain::load_task(&ctx.state, &tid)
+        .await
+        .unwrap();
+    assert_eq!(t.status, "in_progress", "5 次相同调用不应熔断");
+
+    for i in 5..10 {
         fux::server::events::append(&ctx.state.db, &ctx.state.broadcast, &tid, "tool.call", "agent:x", Some(&run_id),
             json!({ "toolCallId": format!("c{i}"), "title": "读同一文件", "kind": "read", "rawInput": { "path": "same.txt" } })).await.unwrap();
     }

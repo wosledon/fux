@@ -492,7 +492,7 @@ async fn start_stage(
          WHERE NOT EXISTS (SELECT 1 FROM runs WHERE task_id = ? AND stage_key = ? AND status IN ('running','finished','skipped'))",
     )
     .bind(&run_id).bind(&task.id).bind(&agent.id).bind(&node_id).bind(idx)
-    .bind(&stage.key).bind(&project_id).bind(&branch).bind(gitflow::lease_deadline())
+    .bind(&stage.key).bind(&project_id).bind(&branch).bind(gitflow::lease_deadline_secs(120))
     .bind(&task.id).bind(&stage.key)
     .execute(&state.db).await?;
     if inserted.rows_affected() == 0 {
@@ -595,7 +595,7 @@ pub async fn finish_stage(
                     "INSERT INTO runs (id, task_id, agent_id, node_id, stage, stage_key, project_id, branch, lease_expires_at, retry_count, retry_of, status) VALUES (?,?,?,?,?,?,?,?,?,?,?, 'running')",
                 )
                 .bind(&new_run).bind(&task.id).bind(&run.agent_id).bind(&run.node_id).bind(run.stage)
-                .bind(&stage.key).bind(&run.project_id).bind(&run.branch).bind(gitflow::lease_deadline())
+                .bind(&stage.key).bind(&run.project_id).bind(&run.branch).bind(gitflow::lease_deadline_secs(120))
                 .bind(run.retry_count + 1).bind(&run.id)
                 .execute(&state.db).await?;
                 events::append(&state.db, &state.broadcast, &task.id, "run.started", "system", Some(&new_run),

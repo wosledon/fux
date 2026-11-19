@@ -7,7 +7,8 @@ use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
 use std::path::PathBuf;
 use std::sync::Arc;
-use tokio::sync::mpsc;
+use std::sync::atomic::{AtomicBool, AtomicU32, Ordering};
+use tokio::sync::{Notify, mpsc};
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -99,6 +100,14 @@ pub fn map_effort(effort: &str) -> String {
     }
 }
 
+/// Run 存续期间维持租约；Drop 时停止后台心跳。
+struct HeartbeatGuard(tokio::task::JoinHandle<()>);
+impl Drop for HeartbeatGuard {
+    fn drop(&mut self) {
+        self.0.abort();
+    }
+}
+
 fn pick_option(params: &Value, decision: &str) -> Option<String> {
     let want = match decision {
         "allow_once" => "allow_once",
@@ -155,6 +164,7 @@ async fn map_update(sink: &Arc<dyn RunSink>, u: &Value) {
                 json!({
                     "toolCallId": u.get("toolCallId"),
                     "title": u.get("title"),
+                    "name": u.get("name"),
                     "kind": u.get("kind"),
                     "rawInput": u.get("rawInput"),
                 }),
@@ -246,6 +256,21 @@ async fn execute_inner(
         tokio::fs::write(dir.join("SKILL.md"), content).await.ok();
     }
 
+    // 独立于 turn 的租约心跳：单次 prompt 可能持续几十秒，不能只在轮次之间续租
+    let turn_counter = Arc::new(AtomicU32::new(0));
+    let _heartbeat = HeartbeatGuard(tokio::spawn({
+        let sink = sink.clone();
+        let turn_counter = turn_counter.clone();
+        async move {
+            let mut tick = tokio::time::interval(std::time::Duration::from_secs(10));
+            tick.tick().await; // 消费 interval 的立即首 tick
+            loop {
+                sink.heartbeat(turn_counter.load(Ordering::Relaxed)).await;
+                tick.tick().await;
+            }
+        }
+    }));
+
     let mut args = spec.args.clone();
     if spec.cli_kind == "copilot" {
         args.push(format!("--effort={}", map_effort(&spec.effort)));
@@ -278,12 +303,18 @@ async fn execute_inner(
     .await;
 
     let client = Arc::new(client);
+    // 取消信号：pump 收到后先发 ACP session/cancel，主循环最多再等 15 秒，
+    // 超时直接结束会话（client 丢弃时 kill_on_drop 会终止子进程），防止被取消的 Run 继续烧额度。
+    let cancel_flag = Arc::new(AtomicBool::new(false));
+    let cancel_notify = Arc::new(Notify::new());
     // pump 只处理 agent→client 请求（权限）与取消信号；
     // session/update 事件在等待 prompt 期间内联消费，避免 abort 竞态丢事件。
     let pump = {
         let client = client.clone();
         let sink = sink.clone();
         let session_id = session_id.clone();
+        let cancel_flag = cancel_flag.clone();
+        let cancel_notify = cancel_notify.clone();
         tokio::spawn(async move {
             loop {
                 tokio::select! {
@@ -300,6 +331,8 @@ async fn execute_inner(
                         }
                     }
                     Some(_) = cancel_rx.recv() => {
+                        cancel_flag.store(true, Ordering::SeqCst);
+                        cancel_notify.notify_waiters();
                         let _ = client.cancel(&session_id).await;
                     }
                     else => break,
@@ -320,22 +353,50 @@ async fn execute_inner(
     let mut first = true;
     let outcome = loop {
         turn_count += 1;
+        turn_counter.store(turn_count, Ordering::Relaxed);
         sink.heartbeat(turn_count).await;
         let text = build_prompt(&spec, &guidance, &spec.context_summary, first);
         first = false;
+        let mut forced_cancel = false;
         // 等待 prompt 的同时内联消费事件流（保证事件先于响应落库）
         let resp = {
             let fut = client.prompt(&session_id, &text);
             tokio::pin!(fut);
+            let mut cancel_deadline: Option<tokio::time::Instant> = None;
             loop {
+                if cancel_flag.load(Ordering::Relaxed) && cancel_deadline.is_none() {
+                    cancel_deadline =
+                        Some(tokio::time::Instant::now() + std::time::Duration::from_secs(15));
+                }
+                let deadline = cancel_deadline;
                 tokio::select! {
                     r = &mut fut => break r,
                     Some(u) = updates_rx.recv() => map_update(&sink, &u).await,
+                    // 收到取消通知后回到循环头部设置截止时间
+                    _ = cancel_notify.notified() => {}
+                    // 宽限期内 agent 未完事，强制结束
+                    _ = async {
+                        if let Some(d) = deadline {
+                            tokio::time::sleep_until(d).await;
+                        }
+                    }, if deadline.is_some() => {
+                        forced_cancel = true;
+                        break Err(anyhow!("取消超时，已强制结束会话"));
+                    }
                 }
             }
         };
         match resp {
             Err(e) => {
+                if forced_cancel {
+                    break RunOutcome {
+                        status: "cancelled".into(),
+                        stop_reason: "cancelled".into(),
+                        turn_count,
+                        session_id: session_id.clone(),
+                        error: None,
+                    };
+                }
                 break RunOutcome {
                     status: "failed".into(),
                     stop_reason: "interrupted".into(),

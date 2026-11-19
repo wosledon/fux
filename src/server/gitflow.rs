@@ -364,7 +364,12 @@ async fn finish_inner(
 }
 
 pub fn lease_deadline() -> String {
-    (chrono::Utc::now() + chrono::Duration::seconds(30))
+    lease_deadline_secs(30)
+}
+
+/// 指定租约时长：工作流节点启动阶段（clone/worktree/CLI 冷启动）可给更长的初始宽限。
+pub fn lease_deadline_secs(secs: i64) -> String {
+    (chrono::Utc::now() + chrono::Duration::seconds(secs))
         .format("%Y-%m-%dT%H:%M:%S%.3fZ")
         .to_string()
 }

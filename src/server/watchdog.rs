@@ -16,7 +16,8 @@ struct Gates {
 impl Default for Gates {
     fn default() -> Self {
         Self {
-            loop_window: 5,
+            // 连续 10 次完全相同的工具调用才判定抽搐；5 次容易把“重复确认/重读文件”误伤
+            loop_window: 10,
             silence_secs: 120,
             no_progress_secs: 600,
             max_turns: 200,
@@ -143,16 +144,33 @@ async fn scan(state: &SharedState) -> anyhow::Result<()> {
             if calls.len() >= g.loop_window && g.loop_window >= 3 {
                 let hashes: Vec<String> = calls
                     .iter()
-                    .map(|c| {
+                    .filter_map(|c| {
                         let v: Value = serde_json::from_str(&c.payload).unwrap_or(json!({}));
-                        format!(
-                            "{}|{}",
-                            v.get("title").and_then(|t| t.as_str()).unwrap_or(""),
-                            v.get("rawInput").map(|r| r.to_string()).unwrap_or_default()
-                        )
+                        let title = v.get("title").and_then(|t| t.as_str()).unwrap_or("");
+                        let name = v.get("name").and_then(|t| t.as_str()).unwrap_or("");
+                        let raw = v.get("rawInput");
+                        // 没有 rawInput 无法区分不同调用（OpenCode 即如此），不能据此判循环
+                        let detailed = match raw {
+                            Some(Value::Object(m)) => !m.is_empty(),
+                            Some(Value::String(s)) => !s.trim().is_empty(),
+                            Some(Value::Null) | None => false,
+                            Some(_) => true,
+                        };
+                        if !detailed {
+                            return None;
+                        }
+                        Some(format!(
+                            "{}|{}|{}",
+                            title,
+                            name,
+                            raw.map(|r| r.to_string()).unwrap_or_default()
+                        ))
                     })
                     .collect();
-                if hashes.windows(2).all(|w| w[0] == w[1]) {
+                if hashes.len() >= g.loop_window
+                    && g.loop_window >= 3
+                    && hashes.windows(2).all(|w| w[0] == w[1])
+                {
                     trip = Some((
                         "loop",
                         format!("连续 {} 次相同工具调用（模型抽搐）", g.loop_window),
@@ -170,10 +188,12 @@ async fn scan(state: &SharedState) -> anyhow::Result<()> {
                 .unwrap_or_default();
                 let has_progress = all_calls.iter().any(|c| {
                     let v: Value = serde_json::from_str(&c.payload).unwrap_or(json!({}));
+                    let kind = v.get("kind").and_then(|k| k.as_str());
+                    let title = v.get("title").and_then(|k| k.as_str());
                     matches!(
-                        v.get("kind").and_then(|k| k.as_str()),
+                        kind,
                         Some("edit" | "write" | "execute" | "terminal" | "delete" | "move")
-                    )
+                    ) || matches!(title, Some("execute" | "bash" | "shell"))
                 });
                 if !has_progress && !all_calls.is_empty() {
                     trip = Some(("no_progress", format!("{wall}s 内无编辑/执行类进展")));

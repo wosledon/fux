@@ -552,8 +552,9 @@ impl RunSink for LocalSink {
             payload,
         )
         .await;
-        let _ = sqlx::query("UPDATE runs SET last_event_at = ? WHERE id = ?")
+        let _ = sqlx::query("UPDATE runs SET last_event_at = ?, lease_expires_at = ? WHERE id = ?")
             .bind(crate::now())
+            .bind(gitflow::lease_deadline())
             .bind(&self.run_id)
             .execute(&self.state.db)
             .await;
@@ -636,14 +637,18 @@ impl RunSink for LocalSink {
     }
 
     async fn heartbeat(&self, turn_count: u32) {
-        let _ = sqlx::query("UPDATE runs SET turn_count = ?, last_event_at = ? WHERE id = ?")
-            .bind(turn_count as i64)
-            .bind(crate::now())
-            .bind(&self.run_id)
-            .execute(&self.state.db)
-            .await;
+        let deadline = gitflow::lease_deadline();
+        let _ = sqlx::query(
+            "UPDATE runs SET turn_count = ?, last_event_at = ?, lease_expires_at = ? WHERE id = ?",
+        )
+        .bind(turn_count as i64)
+        .bind(crate::now())
+        .bind(&deadline)
+        .bind(&self.run_id)
+        .execute(&self.state.db)
+        .await;
         let _ = sqlx::query("UPDATE tasks SET lease_expires_at = ? WHERE lease_run_id = ?")
-            .bind(gitflow::lease_deadline())
+            .bind(&deadline)
             .bind(&self.run_id)
             .execute(&self.state.db)
             .await;
