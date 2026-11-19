@@ -74,6 +74,9 @@ export default function AssistantPage() {
   const newChatRef = useRef(false)
   const initializedRef = useRef(false)
 
+  // 离开页面时中断本地 SSE；后端任务会继续生成，回来时通过状态轮询补齐结果
+  useEffect(() => () => { abortRef.current?.abort() }, [])
+
   const { data: sessions = [] } = useQuery({
     queryKey: ['assistant-sessions', wsId],
     queryFn: () => get<AssistantSession[]>(`/workspaces/${wsId}/assistant/sessions`),
@@ -82,6 +85,21 @@ export default function AssistantPage() {
     queryKey: ['agents', wsId],
     queryFn: () => get<Agent[]>(`/workspaces/${wsId}/agents`),
   })
+  const { data: assistantStatus } = useQuery({
+    queryKey: ['assistant-status', activeId],
+    queryFn: () => get<{ generating: boolean }>(`/assistant/sessions/${activeId}/status`),
+    enabled: !!activeId,
+    refetchInterval: 2500,
+  })
+  const generating = !!assistantStatus?.generating
+  const prevGenerating = useRef(false)
+  useEffect(() => {
+    if (prevGenerating.current && !generating && activeId) {
+      qc.invalidateQueries({ queryKey: ['assistant-messages', activeId] })
+      qc.invalidateQueries({ queryKey: ['assistant-sessions', wsId] })
+    }
+    prevGenerating.current = generating
+  }, [generating, activeId])
   const { data: clis = [] } = useQuery({
     queryKey: ['clis', wsId],
     queryFn: () => get<CliEntry[]>(`/cli-entries?workspaceId=${wsId}`),
@@ -90,6 +108,7 @@ export default function AssistantPage() {
     queryKey: ['assistant-messages', activeId],
     queryFn: () => get<AssistantMessage[]>(`/assistant/sessions/${activeId}/messages`),
     enabled: !!activeId,
+    refetchInterval: (busy || generating) ? 1500 : false,
   })
   const { data: boardData } = useQuery({
     queryKey: ['board', wsId],
@@ -450,10 +469,10 @@ export default function AssistantPage() {
                     </Box>
                   )
                 })}
-                {thinking && (
+                {(thinking || generating) && (
                   <Box sx={{ display: 'flex', gap: 1.25, alignItems: 'center', color: 'text.secondary', pl: 0.5 }}>
                     <CircularProgress size={14} />
-                    <Typography variant="caption">{status || '正在分析工作区…'}</Typography>
+                    <Typography variant="caption">{status || (generating ? '正在生成，完成后会自动显示…' : '正在分析工作区…')}</Typography>
                   </Box>
                 )}
                 <div ref={bottomRef} />
@@ -765,6 +784,7 @@ function ProcessBlock({ thoughts, tools, live }: { thoughts: string; tools: Tool
       }}>
         <PsychologyOutlinedIcon sx={{ fontSize: 16 }} />
         <Typography variant="caption" fontWeight={650}>执行过程</Typography>
+        {hasThoughts && <Chip size="small" variant="outlined" label="思考" sx={{ height: 18, fontSize: 10 }} />}
         {tools.length > 0 && <Chip size="small" variant="outlined" label={`${tools.length} 个工具`} sx={{ height: 18, fontSize: 10 }} />}
         {live && <CircularProgress size={10} />}
         <ExpandMoreIcon sx={{ fontSize: 16, transition: 'transform .15s', transform: open ? 'rotate(180deg)' : 'none' }} />
@@ -772,14 +792,32 @@ function ProcessBlock({ thoughts, tools, live }: { thoughts: string; tools: Tool
       <Collapse in={open} timeout="auto" unmountOnExit>
         <Box sx={{
           mt: 0.75, pl: 1.5, ml: 0.5, borderLeft: '2px solid', borderColor: 'divider',
-          display: 'grid', gap: 0.75,
+          display: 'grid', gap: 1.25,
         }}>
-          {tools.map(t => <ToolRow key={t.id || t.title} tool={t} />)}
           {hasThoughts && (
-            <Box component="pre" sx={{
-              m: 0, fontFamily: 'inherit', fontSize: 12.5, lineHeight: 1.7, color: 'text.secondary',
-              whiteSpace: 'pre-wrap', wordBreak: 'break-word', maxHeight: 280, overflowY: 'auto',
-            }}>{thoughts}</Box>
+            <Box>
+              <Box sx={{ display: 'flex', alignItems: 'center', gap: 0.5, color: 'text.secondary', mb: 0.5 }}>
+                <PsychologyOutlinedIcon sx={{ fontSize: 13 }} />
+                <Typography variant="caption" fontWeight={650}>思考</Typography>
+                {live && <CircularProgress size={9} />}
+              </Box>
+              <Box component="pre" sx={{
+                m: 0, pl: 1.25, borderLeft: '1px dashed', borderColor: 'divider',
+                fontFamily: 'inherit', fontSize: 12.5, lineHeight: 1.7, color: 'text.secondary',
+                whiteSpace: 'pre-wrap', wordBreak: 'break-word', maxHeight: 260, overflowY: 'auto',
+              }}>{thoughts}</Box>
+            </Box>
+          )}
+          {tools.length > 0 && (
+            <Box>
+              <Box sx={{ display: 'flex', alignItems: 'center', gap: 0.5, color: 'text.secondary', mb: 0.5 }}>
+                <BuildOutlinedIcon sx={{ fontSize: 13 }} />
+                <Typography variant="caption" fontWeight={650}>工具调用</Typography>
+              </Box>
+              <Box sx={{ display: 'grid', gap: 0.5 }}>
+                {tools.map(t => <ToolRow key={t.id || t.title} tool={t} />)}
+              </Box>
+            </Box>
           )}
         </Box>
       </Collapse>
@@ -798,11 +836,20 @@ function ToolIcon({ kind }: { kind?: string }) {
   }
 }
 
+const TOOL_TITLE_ALIAS: Record<string, string> = {
+  execute: '执行命令',
+  read: '读取文件',
+  edit: '编辑文件',
+  search: '搜索',
+  fetch: '请求数据',
+  think: '思考',
+  other: '工具',
+}
+
 function ToolRow({ tool }: { tool: ToolCallView }) {
   const color = tool.status === 'completed' ? 'success.main' : tool.status === 'failed' ? 'error.main' : 'primary.main'
-  const label = tool.detail
-    ? (tool.title && tool.title !== 'execute' && tool.title !== '工具' ? `${tool.title} · ${tool.detail}` : tool.detail)
-    : tool.title
+  const title = tool.title ? (TOOL_TITLE_ALIAS[tool.title] || tool.title) : '工具'
+  const label = tool.detail ? `${title} · ${tool.detail}` : title
   return (
     <Box sx={{ display: 'flex', alignItems: 'center', gap: 0.75 }}>
       <Box sx={{ color: 'text.disabled', display: 'flex', flexShrink: 0 }}><ToolIcon kind={tool.kind} /></Box>
