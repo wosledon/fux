@@ -164,33 +164,46 @@ function TaskCard({ task, agents, workflows, projects, types, onOpen }: {
         transition: 'transform .16s, box-shadow .16s',
         ...(running ? {
           position: 'relative',
-          overflow: 'hidden',
-          border: '1px solid #e8e5ff',
-          boxShadow: '0 3px 16px rgba(99,91,255,0.14)',
+          border: '1px solid #f0eeff',
+          boxShadow: 'inset 0 0 0 1px rgba(236,233,255,0.9), 0 4px 18px rgba(99,91,255,0.15)',
         } : {}),
         '&:hover': { transform: 'translateY(-2px)', boxShadow: '0 8px 20px rgba(29,36,58,0.1)' },
         '&:active': { cursor: 'grabbing' },
       }}>
       {running && (
-        <Box component="svg" aria-hidden sx={{ position: 'absolute', inset: 0, width: '100%', height: '100%', pointerEvents: 'none' }}>
-          <defs>
-            <linearGradient id={`beam-${task.id}`} x1="0%" y1="0%" x2="100%" y2="100%">
-              <stop offset="0%" stopColor="#635bff" />
-              <stop offset="55%" stopColor="#9b8cff" />
-              <stop offset="100%" stopColor="#d8d1ff" />
-            </linearGradient>
-          </defs>
-          <rect x={0.75} y={0.75} rx={10} fill="none" stroke="#eeebff" strokeWidth={1.5}
-            style={{ width: 'calc(100% - 1.5px)', height: 'calc(100% - 1.5px)' }} />
-          <rect x={0.75} y={0.75} rx={10} fill="none" stroke={`url(#beam-${task.id})`}
-            strokeWidth={2.2} strokeLinecap="round" strokeDasharray="84 1200"
-            style={{
-              width: 'calc(100% - 1.5px)', height: 'calc(100% - 1.5px)',
-              animation: 'fuxBeam 2.4s linear infinite',
-            }} />
-        </Box>
+        <>
+          <Box aria-hidden sx={{
+            position: 'absolute', inset: -2, borderRadius: 'inherit', padding: '3px',
+            pointerEvents: 'none', overflow: 'hidden', zIndex: 0, opacity: 0.75, filter: 'blur(5px)',
+            mask: 'linear-gradient(#000 0 0) content-box, linear-gradient(#000 0 0)',
+            maskComposite: 'exclude',
+            WebkitMask: 'linear-gradient(#000 0 0) content-box, linear-gradient(#000 0 0)',
+            WebkitMaskComposite: 'xor',
+            '&::before': {
+              content: '""', position: 'absolute', left: '-50%', top: '-50%', width: '200%', height: '200%',
+              background: 'conic-gradient(from 0deg, transparent 0deg 170deg, rgba(99,91,255,0.45) 240deg, #9487ff 295deg, rgba(99,91,255,0) 345deg)',
+              animation: 'fuxSpin 7s linear infinite reverse',
+            },
+          }} />
+          <Box aria-hidden sx={{
+            position: 'absolute', inset: 0, borderRadius: 'inherit', padding: '2px',
+            pointerEvents: 'none', overflow: 'hidden', zIndex: 1,
+            filter: 'drop-shadow(0 0 3px rgba(99,91,255,0.55)) saturate(1.15)',
+            mask: 'linear-gradient(#000 0 0) content-box, linear-gradient(#000 0 0)',
+            maskComposite: 'exclude',
+            WebkitMask: 'linear-gradient(#000 0 0) content-box, linear-gradient(#000 0 0)',
+            WebkitMaskComposite: 'xor',
+            '&::before': {
+              content: '""', position: 'absolute', left: '-50%', top: '-50%', width: '200%', height: '200%',
+              background: 'conic-gradient(from 0deg, transparent 0deg 205deg, rgba(99,91,255,0.35) 235deg, #635bff 275deg, #b3a6ff 305deg, #ffffff 318deg, transparent 335deg)',
+              animation: 'fuxSpin 2.6s linear infinite',
+            },
+          }} />
+        </>
       )}
-      <CardBody task={task} agents={agents} workflows={workflows} projects={projects} types={types} />
+      <Box sx={{ position: 'relative', zIndex: 2 }}>
+        <CardBody task={task} agents={agents} workflows={workflows} projects={projects} types={types} />
+      </Box>
     </Paper>
   )
 }
