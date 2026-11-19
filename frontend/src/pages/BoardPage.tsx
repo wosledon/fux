@@ -71,7 +71,7 @@ function CardBody({ task, agents, workflows }: { task: Task; agents: Agent[]; wo
         </Box>
       )}
       {task.status === 'blocked' && task.blockReason && (
-        <Box sx={{ mt: 1.25, px: 1.25, py: 0.75, borderRadius: 2, bgcolor: '#fdeef0' }}>
+        <Box sx={{ mt: 1.25, px: 1.25, py: 0.75, borderRadius: 1.25, bgcolor: '#fdeef0' }}>
           <Typography variant="caption" sx={{ color: 'error.main', display: 'block', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
             {task.blockReason}
           </Typography>
@@ -93,7 +93,7 @@ function TaskCard({ task, agents, workflows, onOpen }: { task: Task; agents: Age
     <Paper ref={setNodeRef} {...listeners} {...attributes} onClick={onOpen}
       sx={{
         p: 1.75, mb: 1.25, cursor: 'grab', opacity: isDragging ? 0.35 : 1,
-        bgcolor: '#ffffff', borderRadius: 3, boxShadow: '0 1px 3px rgba(29,36,58,0.07)',
+        bgcolor: '#ffffff', borderRadius: 1.5, boxShadow: '0 1px 3px rgba(29,36,58,0.07)',
         transition: 'transform .16s, box-shadow .16s',
         '&:hover': { transform: 'translateY(-2px)', boxShadow: '0 8px 20px rgba(29,36,58,0.1)' },
         '&:active': { cursor: 'grabbing' },
@@ -114,7 +114,7 @@ function LaneColumn({ lane, tasks, agents, workflows, onOpen, onCreate, dropStat
   return (
     <Box ref={setNodeRef} sx={{
       width: 304, minWidth: 304, display: 'flex', flexDirection: 'column', height: '100%',
-      bgcolor: '#eef0f5', borderRadius: 4, border: '2px solid',
+      bgcolor: '#eef0f5', borderRadius: 1.5, border: '2px solid',
       borderColor: dropState === 'ok' ? 'success.main' : dropState === 'bad' ? 'error.main' : 'transparent',
       transition: 'border-color .15s, background-color .15s', overflow: 'hidden',
     }}>
@@ -249,7 +249,7 @@ export default function BoardPage() {
         </Box>
         <DragOverlay dropAnimation={null}>
           {activeTask && (
-            <Paper sx={{ p: 1.75, width: 288, transform: 'rotate(1.5deg)', boxShadow: '0 18px 48px rgba(29,36,58,0.22)', borderRadius: 3, cursor: 'grabbing' }}>
+            <Paper sx={{ p: 1.75, width: 288, transform: 'rotate(1.5deg)', boxShadow: '0 18px 48px rgba(29,36,58,0.22)', borderRadius: 1.5, cursor: 'grabbing' }}>
               <CardBody task={activeTask} agents={agents} workflows={workflows} />
             </Paper>
           )}

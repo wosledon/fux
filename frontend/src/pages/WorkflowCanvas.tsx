@@ -223,7 +223,7 @@ export default function WorkflowCanvas({ stages, agents, projects, selected, onC
                 onClick={e => { e.stopPropagation(); onNodeClick(s) }}
                 sx={{
                   position: 'absolute', left: p.x, top: p.y, width: NODE_W, height: NODE_H,
-                  p: 1.5, borderRadius: 2.5, cursor: readonly ? 'pointer' : connectMode ? 'crosshair' : 'grab', userSelect: 'none',
+                  p: 1.5, borderRadius: 1.5, cursor: readonly ? 'pointer' : connectMode ? 'crosshair' : 'grab', userSelect: 'none',
                   border: '2px solid',
                   borderColor: isSource ? 'warning.main' : isSelected ? 'primary.main' : (readonly && statusBorder ? statusBorder : 'divider'),
                   boxShadow: isSelected ? '0 6px 18px rgba(99,91,255,0.16)' : '0 1px 3px rgba(29,36,58,0.06)',

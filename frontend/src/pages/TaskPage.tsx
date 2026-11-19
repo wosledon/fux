@@ -174,7 +174,7 @@ export default function TaskPage() {
           maxWidth: 1500, mx: 'auto', height: { xs: 'auto', lg: '100%' }, display: 'grid', gap: 2.5,
           gridTemplateColumns: { xs: 'minmax(0,1fr)', lg: 'minmax(0,1fr) 340px' }, alignItems: 'stretch',
         }}>
-          <Paper sx={{ minHeight: { xs: 560, lg: 0 }, display: 'flex', flexDirection: 'column', borderRadius: 2.5, overflow: 'hidden', boxShadow: '0 1px 4px rgba(29,36,58,0.05)' }}>
+          <Paper sx={{ minHeight: { xs: 560, lg: 0 }, display: 'flex', flexDirection: 'column', borderRadius: 1.25, overflow: 'hidden', boxShadow: '0 1px 4px rgba(29,36,58,0.05)' }}>
             <Tabs value={tab} onChange={(_, v) => setTab(v)} sx={{ px: 2, borderBottom: '1px solid', borderColor: 'divider', bgcolor: '#fafbfc', flexShrink: 0 }}>
               <Tab label={`活动 ${items.length}`} /><Tab label="任务说明" />{task.workflowId && <Tab label="流程" />}
             </Tabs>
@@ -193,10 +193,10 @@ export default function TaskPage() {
                     <Box key={i}>
                       {runHeader && <RunDivider label={`智能体输出 · ${fmtTime(env?.createdAt || '')}`} />}
                       <Box sx={{ display: 'flex', gap: 1.25, alignItems: 'flex-start' }}>
-                        <Box sx={{ width: 30, height: 30, borderRadius: 2.5, bgcolor: '#eceaff', display: 'grid', placeItems: 'center', flexShrink: 0, mt: 0.25 }}>
+                        <Box sx={{ width: 30, height: 30, borderRadius: 1.25, bgcolor: '#eceaff', display: 'grid', placeItems: 'center', flexShrink: 0, mt: 0.25 }}>
                           <SmartToyIcon sx={{ fontSize: 17, color: 'primary.main' }} />
                         </Box>
-                        <Paper elevation={0} sx={{ p: 1.75, bgcolor: '#f1f2f6', borderRadius: 3, whiteSpace: 'pre-wrap', wordBreak: 'break-word', maxWidth: '92%' }}>
+                        <Paper elevation={0} sx={{ p: 1.75, bgcolor: '#f1f2f6', borderRadius: 1.5, whiteSpace: 'pre-wrap', wordBreak: 'break-word', maxWidth: '92%' }}>
                           <Typography variant="body2">{it.text}</Typography>
                         </Paper>
                       </Box>
@@ -212,7 +212,7 @@ export default function TaskPage() {
                 case 'comment.added':
                   return (
                     <Box key={i} sx={{ display: 'flex', gap: 1.25, justifyContent: 'flex-end', alignItems: 'flex-start' }}>
-                      <Paper elevation={0} sx={{ p: 1.5, bgcolor: '#eceaff', borderRadius: 3, maxWidth: '85%' }}>
+                      <Paper elevation={0} sx={{ p: 1.5, bgcolor: '#eceaff', borderRadius: 1.5, maxWidth: '85%' }}>
                         <Typography variant="caption" sx={{ color: 'primary.main', display: 'block', mb: 0.25 }}>
                           {env?.payload?.username || env?.actor} · {fmtTime(env?.createdAt || '')}
                         </Typography>
@@ -246,7 +246,7 @@ export default function TaskPage() {
                 case 'tool.result': return null
                 case 'plan.updated':
                   return (
-                    <Paper key={i} elevation={0} sx={{ p: 1.5, ml: 4.5, bgcolor: 'background.paper', border: '1px solid', borderColor: 'divider', borderRadius: 2 }}>
+                    <Paper key={i} elevation={0} sx={{ p: 1.5, ml: 4.5, bgcolor: 'background.paper', border: '1px solid', borderColor: 'divider', borderRadius: 1.25 }}>
                       <Box sx={{ display: 'flex', alignItems: 'center', gap: 0.75, mb: 1, color: 'text.secondary' }}>
                         <ListAltOutlinedIcon sx={{ fontSize: 16 }} /><Typography variant="caption">执行计划</Typography>
                       </Box>
@@ -280,7 +280,7 @@ export default function TaskPage() {
                   return <Alert key={i} severity="error">质量阀 [{it.kind.split('.')[1]}]：{env?.payload?.diagnostics || env?.payload?.error || '触发熔断'}</Alert>
                 case 'pr.linked':
                   return (
-                    <Paper key={i} elevation={0} sx={{ p: 1.5, bgcolor: 'background.paper', border: '1px solid', borderColor: 'divider', borderRadius: 2 }}>
+                    <Paper key={i} elevation={0} sx={{ p: 1.5, bgcolor: 'background.paper', border: '1px solid', borderColor: 'divider', borderRadius: 1.25 }}>
                       <Box sx={{ display: 'flex', alignItems: 'center', gap: 0.75 }}>
                         <LinkOutlinedIcon sx={{ fontSize: 17, color: 'primary.main' }} />
                         <Typography variant="body2">PR/MR 已就绪（{env?.payload?.prState}）</Typography>
@@ -350,7 +350,7 @@ export default function TaskPage() {
           </Paper>
 
           <Box component="aside" sx={{ minHeight: 0, overflowY: { xs: 'visible', lg: 'auto' }, display: 'flex', flexDirection: 'column', gap: 2, pb: 0.5 }}>
-            <Paper elevation={0} sx={{ p: 2.25, bgcolor: 'background.paper', borderRadius: 2.5, flexShrink: 0, boxShadow: '0 1px 4px rgba(29,36,58,0.05)' }}>
+            <Paper elevation={0} sx={{ p: 2.25, bgcolor: 'background.paper', borderRadius: 1.25, flexShrink: 0, boxShadow: '0 1px 4px rgba(29,36,58,0.05)' }}>
               <Box sx={{ display: 'flex', alignItems: 'center', gap: 1, mb: 2 }}>
                 <RateReviewIcon sx={{ fontSize: 19, color: 'secondary.main' }} />
                 <Typography variant="subtitle2" sx={{ flexGrow: 1 }}>交付审核</Typography>
@@ -391,7 +391,7 @@ export default function TaskPage() {
               )}
             </Paper>
 
-            <Paper elevation={0} sx={{ p: 2.25, bgcolor: 'background.paper', borderRadius: 2.5, flexShrink: 0, boxShadow: '0 1px 4px rgba(29,36,58,0.05)' }}>
+            <Paper elevation={0} sx={{ p: 2.25, bgcolor: 'background.paper', borderRadius: 1.25, flexShrink: 0, boxShadow: '0 1px 4px rgba(29,36,58,0.05)' }}>
               <Typography variant="subtitle2" gutterBottom sx={{ mb: 2 }}>任务信息</Typography>
               <Box sx={{ display: 'grid', gap: 1.25 }}>
                 <MetaRow k="项目" v={data?.project?.name || '—'} />
@@ -402,7 +402,7 @@ export default function TaskPage() {
               </Box>
             </Paper>
 
-            <Paper elevation={0} sx={{ p: 2.25, bgcolor: 'background.paper', borderRadius: 2.5, flexShrink: 0, boxShadow: '0 1px 4px rgba(29,36,58,0.05)' }}>
+            <Paper elevation={0} sx={{ p: 2.25, bgcolor: 'background.paper', borderRadius: 1.25, flexShrink: 0, boxShadow: '0 1px 4px rgba(29,36,58,0.05)' }}>
               <Typography variant="subtitle2" gutterBottom sx={{ mb: 1.5 }}>运行记录（{data?.runs.length || 0}）</Typography>
               {(data?.runs || []).map(r => (
                 <Box key={r.id} sx={{ py: 1.25, borderBottom: '1px solid', borderColor: 'divider', '&:last-child': { borderBottom: 0, pb: 0 } }}>
@@ -468,7 +468,7 @@ function DeliveryRow({ d, projectName, onSaved }: { d: Delivery; projectName: st
     } catch (e: any) { toast(e.message, 'error') } finally { setBusy(false) }
   }
   return (
-    <Box sx={{ p: 1.25, border: '1px solid', borderColor: 'divider', borderRadius: 2 }}>
+    <Box sx={{ p: 1.25, border: '1px solid', borderColor: 'divider', borderRadius: 1.25 }}>
       <Box sx={{ display: 'flex', gap: 0.75, alignItems: 'center', mb: 0.75 }}>
         <Typography variant="body2" fontWeight={650} sx={{ flexGrow: 1 }}>{projectName}</Typography>
         <Chip size="small" variant="outlined" label={d.prState || '未交付'} color={d.prState === 'merged' ? 'success' : 'default'} />
@@ -534,7 +534,7 @@ function WorkflowFlowPanel({ workflow, runs, projects, agents, taskStatus, isAdm
       <Typography variant="caption" color="text.secondary" display="block" sx={{ mb: 1.5 }}>
         节点依赖满足即自动执行；绿色为已完成，紫色为执行中，红色为失败。
       </Typography>
-      <Box sx={{ height: 320, mb: 2.5, border: '1px solid', borderColor: 'divider', borderRadius: 2, overflow: 'hidden' }}>
+      <Box sx={{ height: 320, mb: 2.5, border: '1px solid', borderColor: 'divider', borderRadius: 1.25, overflow: 'hidden' }}>
         <WorkflowCanvas readonly stages={stages} agents={agents} projects={projects} selected={null}
           onChange={() => {}} onSelect={() => {}} statusOf={statusOf} metaOf={metaOf} />
       </Box>
@@ -547,7 +547,7 @@ function WorkflowFlowPanel({ workflow, runs, projects, agents, taskStatus, isAdm
                 const st = stateOf(s.key)
                 const r = latest.get(s.key)
                 return (
-                  <Paper key={s.key} elevation={0} sx={{ p: 1.5, border: '1px solid', borderColor: 'divider', borderRadius: 2 }}>
+                  <Paper key={s.key} elevation={0} sx={{ p: 1.5, border: '1px solid', borderColor: 'divider', borderRadius: 1.25 }}>
                     <Box sx={{ display: 'flex', gap: 0.75, alignItems: 'center', mb: 0.75 }}>
                       <Typography variant="body2" fontWeight={650} sx={{ flexGrow: 1 }}>{s.name || s.key}</Typography>
                       <Chip size="small" color={STAGE_COLOR[st] as any} label={STAGE_LABEL[st] || st} variant={st === 'pending' ? 'outlined' : 'filled'} />

@@ -78,7 +78,7 @@ export default function WorkspacesPage() {
                   <CardActionArea onClick={() => nav(`/ws/${w.id}`)} sx={{ p: 0.5 }}>
                     <CardContent>
                       <Box sx={{ display: 'flex', alignItems: 'center', gap: 1, mb: 1.5 }}>
-                        <Box sx={{ width: 34, height: 34, borderRadius: 2.5, display: 'grid', placeItems: 'center', fontWeight: 800, bgcolor: '#eceaff', color: 'primary.main' }}>
+                        <Box sx={{ width: 34, height: 34, borderRadius: 1.25, display: 'grid', placeItems: 'center', fontWeight: 800, bgcolor: '#eceaff', color: 'primary.main' }}>
                           {w.name.slice(0, 1)}
                         </Box>
                         <Typography variant="h6" sx={{ flexGrow: 1, minWidth: 0, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{w.name}</Typography>

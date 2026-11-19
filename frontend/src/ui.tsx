@@ -37,7 +37,7 @@ export function EmptyState({ icon, title, desc, action }: { icon?: ReactNode; ti
   return (
     <Box sx={{ textAlign: 'center', py: 7, px: 3 }}>
       <Box sx={{
-        width: 58, height: 58, borderRadius: 4, display: 'grid', placeItems: 'center', mx: 'auto', mb: 2,
+        width: 58, height: 58, borderRadius: 2, display: 'grid', placeItems: 'center', mx: 'auto', mb: 2,
         color: 'text.secondary', bgcolor: '#eef0f6', border: 'none',
         '& svg': { fontSize: 28 },
       }}>{icon || <InboxIcon />}</Box>

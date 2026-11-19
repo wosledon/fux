@@ -96,12 +96,12 @@ export default function WorkspaceLayout() {
         <Box sx={{ px: 3, py: 3 }}><Logo size={30} /></Box>
         <Box sx={{ px: 2, pb: 2.5 }}>
           <ButtonBase onClick={() => nav('/')} sx={{
-            width: '100%', p: 1.25, borderRadius: 3, textAlign: 'left', gap: 1.25,
+            width: '100%', p: 1.25, borderRadius: 1.5, textAlign: 'left', gap: 1.25,
             bgcolor: '#f1f2f7', transition: 'background-color .15s, transform .15s',
             '&:hover': { bgcolor: '#ebecf3', transform: 'translateY(-1px)' },
           }}>
             <Box sx={{
-              width: 34, height: 34, borderRadius: 2.5, display: 'grid', placeItems: 'center', flexShrink: 0,
+              width: 34, height: 34, borderRadius: 1.25, display: 'grid', placeItems: 'center', flexShrink: 0,
               color: '#5b50d6', bgcolor: '#e5e3ff', fontWeight: 800,
             }}>{ctx.workspace.name.slice(0, 1)}</Box>
             <Box sx={{ flexGrow: 1, minWidth: 0 }}>

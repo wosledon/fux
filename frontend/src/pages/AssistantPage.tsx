@@ -487,7 +487,7 @@ function EmptyIntro({ name, onPick }: { name: string; onPick: (s: string) => voi
   return (
     <Box sx={{ textAlign: 'center', py: { xs: 4, md: 7 } }}>
       <Box sx={{
-        width: 68, height: 68, mx: 'auto', mb: 2.5, borderRadius: 2.5, color: '#fff',
+        width: 68, height: 68, mx: 'auto', mb: 2.5, borderRadius: 1.5, color: '#fff',
         background: 'linear-gradient(135deg,#635bff,#9b8cff)', display: 'grid', placeItems: 'center',
         boxShadow: '0 12px 28px rgba(99,91,255,0.25)',
       }}>

@@ -52,7 +52,7 @@ export default function LoginPage() {
         <Stack spacing={2.5}>
           {FEATURES.map(f => (
             <Box key={f.t} sx={{ display: 'flex', gap: 2, alignItems: 'flex-start' }}>
-              <Box sx={{ width: 38, height: 38, borderRadius: 2.5, display: 'grid', placeItems: 'center', bgcolor: '#eceaff', color: 'primary.main', flexShrink: 0 }}>
+              <Box sx={{ width: 38, height: 38, borderRadius: 1.25, display: 'grid', placeItems: 'center', bgcolor: '#eceaff', color: 'primary.main', flexShrink: 0 }}>
                 {f.icon}
               </Box>
               <Box>

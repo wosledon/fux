@@ -73,8 +73,8 @@ export default function InboxPage() {
 
         <Box sx={{ display: 'flex', alignItems: 'center', mb: 2.5, gap: 2 }}>
           <Tabs value={filter} onChange={(_, v) => setFilter(v)} sx={{
-            minHeight: 42, p: 0.5, bgcolor: '#e9ecf3', borderRadius: 3,
-            '& .MuiTabs-indicator': { height: '100%', borderRadius: 2.5, bgcolor: '#ffffff', boxShadow: '0 1px 4px rgba(29,36,58,0.1)' },
+            minHeight: 42, p: 0.5, bgcolor: '#e9ecf3', borderRadius: 1.5,
+            '& .MuiTabs-indicator': { height: '100%', borderRadius: 1.25, bgcolor: '#ffffff', boxShadow: '0 1px 4px rgba(29,36,58,0.1)' },
             '& .MuiTab-root': { zIndex: 1 },
           }}>
             <Tab value="all" label={`全部消息 ${items.length}`} disableRipple sx={{ minHeight: 34, py: 0, px: 2, '&.Mui-selected': { color: 'text.primary' } }} />
@@ -84,7 +84,7 @@ export default function InboxPage() {
           {unread > 0 && <Chip size="small" color="primary" label={`${unread} 条待处理`} />}
         </Box>
 
-        <Paper sx={{ borderRadius: 2.5, overflow: 'hidden', boxShadow: '0 1px 4px rgba(29,36,58,0.05)' }}>
+        <Paper sx={{ borderRadius: 1.25, overflow: 'hidden', boxShadow: '0 1px 4px rgba(29,36,58,0.05)' }}>
           {isLoading ? (
             <Box sx={{ py: 8, display: 'grid', placeItems: 'center' }}><InboxIcon color="disabled" sx={{ fontSize: 36 }} /></Box>
           ) : filtered.length === 0 ? (
@@ -105,7 +105,7 @@ export default function InboxPage() {
                   '&:focus-visible': { outline: '2px solid', outlineColor: 'primary.main', outlineOffset: -2 },
                 }}>
                 <Box sx={{ position: 'relative', flexShrink: 0 }}>
-                  <Box sx={{ width: 40, height: 40, borderRadius: 2.5, display: 'grid', placeItems: 'center', bgcolor: `${meta.color}14`, color: meta.color, '& svg': { fontSize: 21 } }}>{meta.icon}</Box>
+                  <Box sx={{ width: 40, height: 40, borderRadius: 1.25, display: 'grid', placeItems: 'center', bgcolor: `${meta.color}14`, color: meta.color, '& svg': { fontSize: 21 } }}>{meta.icon}</Box>
                   {!item.read && <Box sx={{ position: 'absolute', width: 8, height: 8, borderRadius: '50%', bgcolor: 'primary.main', top: -2, right: -2, boxShadow: '0 0 0 3px #ffffff' }} />}
                 </Box>
                 <Box sx={{ flexGrow: 1, minWidth: 0, pt: 0.25 }}>
