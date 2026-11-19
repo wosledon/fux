@@ -3,7 +3,7 @@ import { useNavigate, useOutletContext, useParams } from 'react-router-dom'
 import { useQuery, useQueryClient } from '@tanstack/react-query'
 import {
   Box, Typography, Chip, IconButton, Tabs, Tab, TextField, Button, Divider, Alert, Paper,
-  Checkbox, FormControlLabel, Dialog, DialogTitle, DialogContent, DialogActions, Link, Tooltip, CircularProgress,
+  Checkbox, FormControlLabel, Dialog, DialogTitle, DialogContent, DialogActions, Link, Tooltip, CircularProgress, LinearProgress,
 } from '@mui/material'
 import ArrowBackIcon from '@mui/icons-material/ArrowBack'
 import SendIcon from '@mui/icons-material/Send'
@@ -21,12 +21,17 @@ import AutorenewIcon from '@mui/icons-material/Autorenew'
 import RadioButtonUncheckedIcon from '@mui/icons-material/RadioButtonUnchecked'
 import LinkOutlinedIcon from '@mui/icons-material/LinkOutlined'
 import AccountTreeIcon from '@mui/icons-material/AccountTree'
+import SwapHorizIcon from '@mui/icons-material/SwapHoriz'
+import ExpandMoreIcon from '@mui/icons-material/ExpandMore'
+import ExpandLessIcon from '@mui/icons-material/ExpandLess'
 import { get, post, taskEventsUrl, parseJson, STATUS_LABEL, STAGE_LABEL, STAGE_COLOR, type Task, type Run, type Project, type Envelope, type Workflow, type WorkflowStage, type Delivery, type Agent } from '../api'
 import type { WsCtx } from './WorkspaceLayout'
 import { EmptyState, PersonAvatar, StatusChip, useToast } from '../ui'
-import WorkflowCanvas from './WorkflowCanvas'
+import WorkflowCanvas, { autoLayout, NODE_H } from './WorkflowCanvas'
 
-const fmtTime = (s: string) => s?.replace('T', ' ').slice(11, 19)
+const fmtEventTime = (s?: string) => s ? `${s.slice(5, 10)} ${s.slice(11, 19)}` : ''
+
+type TimelineItem = { kind: string; env?: Envelope; text?: string; runId?: string; at: string }
 
 export default function TaskPage() {
   const { taskId = '' } = useParams()
@@ -42,6 +47,7 @@ export default function TaskPage() {
   const [rejectOpen, setRejectOpen] = useState(false)
   const [rejectReason, setRejectReason] = useState('')
   const bottomRef = useRef<HTMLDivElement>(null)
+  const allowAutoScroll = useRef(false)
   const isAdmin = role === 'owner' || role === 'admin'
 
   const { data, isError } = useQuery({ queryKey: ['task', taskId], queryFn: () => get<{ task: Task; runs: Run[]; project?: Project; workflow?: Workflow; deliveries?: Delivery[] }>(`/tasks/${taskId}`) })
@@ -54,6 +60,8 @@ export default function TaskPage() {
 
   useEffect(() => {
     setEvents([])
+    allowAutoScroll.current = false
+    const scrollTimer = window.setTimeout(() => { allowAutoScroll.current = true }, 1000)
     const es = new EventSource(taskEventsUrl(taskId, 0))
     es.onmessage = (ev) => {
       try {
@@ -66,10 +74,19 @@ export default function TaskPage() {
         }
       } catch { /* ignore */ }
     }
-    return () => es.close()
+    return () => {
+      es.close()
+      window.clearTimeout(scrollTimer)
+    }
   }, [taskId, qc])
 
-  useEffect(() => { bottomRef.current?.scrollIntoView({ behavior: 'smooth' }) }, [events.length])
+  useEffect(() => {
+    if (!allowAutoScroll.current) return
+    const el = bottomRef.current?.parentElement
+    // 只有用户本来就在底部时才跟随最新动态，避免查看工作流状态时被拽走
+    if (!el || el.scrollHeight - el.scrollTop - el.clientHeight > 160) return
+    bottomRef.current?.scrollIntoView({ behavior: 'smooth' })
+  }, [events.length])
 
   const refresh = () => {
     qc.invalidateQueries({ queryKey: ['task', taskId] })
@@ -96,17 +113,17 @@ export default function TaskPage() {
   } as Record<string, string>)[task.status] || '评论不会触发执行' : ''
 
   const items = useMemo(() => {
-    const out: { kind: string; env?: Envelope; text?: string; runId?: string }[] = []
+    const out: TimelineItem[] = []
     for (const env of events) {
       if (env.kind === 'agent.message' || env.kind === 'agent.thought') {
         const last = out[out.length - 1]
         const text = env.payload?.text || ''
-        if (last && last.kind === env.kind && last.runId === env.runId) { last.text = (last.text || '') + text }
-        else out.push({ kind: env.kind, text, runId: env.runId })
+        if (last && last.kind === env.kind && last.runId === env.runId) { last.text = last.text ? `${last.text}\n${text}` : text }
+        else out.push({ kind: env.kind, text, runId: env.runId, at: env.createdAt })
       } else if (env.kind === 'usage.updated' || env.kind === 'notification') {
         continue
       } else {
-        out.push({ kind: env.kind, env })
+        out.push({ kind: env.kind, env, at: env.createdAt })
       }
     }
     return out
@@ -176,142 +193,205 @@ export default function TaskPage() {
         }}>
           <Paper sx={{ minHeight: { xs: 560, lg: 0 }, display: 'flex', flexDirection: 'column', borderRadius: 1.25, overflow: 'hidden', boxShadow: '0 1px 4px rgba(29,36,58,0.05)' }}>
             <Tabs value={tab} onChange={(_, v) => setTab(v)} sx={{ px: 2, borderBottom: '1px solid', borderColor: 'divider', bgcolor: '#fafbfc', flexShrink: 0 }}>
-              <Tab label={`活动 ${items.length}`} /><Tab label="任务说明" />{task.workflowId && <Tab label="流程" />}
+              <Tab label={`时间轴 ${items.length}`} /><Tab label="任务说明" />{task.workflowId && <Tab label="流程" />}
             </Tabs>
 
       {tab === 0 && (
         <>
-          <Box sx={{ flexGrow: 1, minHeight: 0, overflowY: 'auto', p: { xs: 2, md: 3 }, display: 'flex', flexDirection: 'column', gap: 1.5 }}>
+          <Box sx={{ flexGrow: 1, minHeight: 0, overflowY: 'auto', p: { xs: 2, md: 3 } }}>
+            {data?.workflow && (
+              <WorkflowStatusPanel workflow={data.workflow} runs={data.runs || []} projects={projects} agents={agents}
+                taskStatus={task.status} onDetail={() => setTab(2)} />
+            )}
+            <Box sx={{ display: 'flex', alignItems: 'center', gap: 1, mb: 1.75 }}>
+              <Typography variant="subtitle2" sx={{ flexGrow: 1 }}>活动时间轴</Typography>
+              <Typography variant="caption" color="text.secondary">共 {items.length} 条动态</Typography>
+            </Box>
             {items.length === 0 && <EmptyState title="还没有任务动态" desc="智能体输出、工具调用、评论和状态变化会实时出现在这里。" />}
-            {items.map((it, i) => {
-              const env = it.env
-              const prev = items[i - 1]
-              const runHeader = it.runId && it.runId !== prev?.runId && ['agent.message', 'agent.thought', 'tool.call'].includes(it.kind)
-              switch (it.kind) {
+            {items.length > 0 && (
+              <Box sx={{ position: 'relative', '&::before': { content: '""', position: 'absolute', left: 13, top: 12, bottom: 24, width: 2, borderRadius: 1, bgcolor: '#e6e8ef' } }}>
+                {items.map((it, i) => {
+                  const env = it.env
+                  const time = fmtEventTime(it.at)
+                  switch (it.kind) {
                 case 'agent.message':
                   return (
-                    <Box key={i}>
-                      {runHeader && <RunDivider label={`智能体输出 · ${fmtTime(env?.createdAt || '')}`} />}
-                      <Box sx={{ display: 'flex', gap: 1.25, alignItems: 'flex-start' }}>
-                        <Box sx={{ width: 30, height: 30, borderRadius: 1.25, bgcolor: '#eceaff', display: 'grid', placeItems: 'center', flexShrink: 0, mt: 0.25 }}>
-                          <SmartToyIcon sx={{ fontSize: 17, color: 'primary.main' }} />
-                        </Box>
-                        <Paper elevation={0} sx={{ p: 1.75, bgcolor: '#f1f2f6', borderRadius: 1.5, whiteSpace: 'pre-wrap', wordBreak: 'break-word', maxWidth: '92%' }}>
-                          <Typography variant="body2">{it.text}</Typography>
-                        </Paper>
-                      </Box>
-                    </Box>
+                    <TimelineRow key={i} icon={<SmartToyIcon sx={{ fontSize: 15 }} />} tone="primary" title="智能体输出" time={time}>
+                      <Paper elevation={0} sx={{ p: 1.5, bgcolor: '#f5f6fa', borderRadius: 1.25, whiteSpace: 'pre-wrap', wordBreak: 'break-word' }}>
+                        <Typography variant="body2" sx={{ lineHeight: 1.75 }}>{it.text}</Typography>
+                      </Paper>
+                    </TimelineRow>
                   )
                 case 'agent.thought':
                   return (
-                    <Box key={i} sx={{ display: 'flex', alignItems: 'flex-start', gap: 0.75, pl: 4.5, color: 'text.secondary' }}>
-                      <LightbulbOutlinedIcon sx={{ fontSize: 15, mt: 0.25, flexShrink: 0 }} />
-                      <Typography variant="caption" sx={{ fontStyle: 'italic', whiteSpace: 'pre-wrap' }}>{it.text}</Typography>
-                    </Box>
+                    <TimelineRow key={i} icon={<LightbulbOutlinedIcon sx={{ fontSize: 14 }} />} tone="muted" title="思考" time={time}>
+                      <Typography variant="caption" color="text.secondary" sx={{ display: 'block', fontStyle: 'italic', whiteSpace: 'pre-wrap', lineHeight: 1.7 }}>{it.text}</Typography>
+                    </TimelineRow>
                   )
                 case 'comment.added':
                   return (
-                    <Box key={i} sx={{ display: 'flex', gap: 1.25, justifyContent: 'flex-end', alignItems: 'flex-start' }}>
-                      <Paper elevation={0} sx={{ p: 1.5, bgcolor: '#eceaff', borderRadius: 1.5, maxWidth: '85%' }}>
-                        <Typography variant="caption" sx={{ color: 'primary.main', display: 'block', mb: 0.25 }}>
-                          {env?.payload?.username || env?.actor} · {fmtTime(env?.createdAt || '')}
-                        </Typography>
-                        <Typography variant="body2" sx={{ whiteSpace: 'pre-wrap' }}>{env?.payload?.text}</Typography>
+                    <TimelineRow key={i} node={<PersonAvatar name={env?.payload?.username || 'U'} size={26} />}
+                      title={`${env?.payload?.username || env?.actor || '成员'} 的评论`} time={time}>
+                      <Paper elevation={0} sx={{ p: 1.5, bgcolor: '#eceaff', borderRadius: 1.25, whiteSpace: 'pre-wrap', wordBreak: 'break-word' }}>
+                        <Typography variant="body2">{env?.payload?.text}</Typography>
                       </Paper>
-                      <PersonAvatar name={env?.payload?.username || 'U'} size={26} />
-                    </Box>
+                    </TimelineRow>
                   )
                 case 'task.moved':
                   return (
-                    <Typography key={i} variant="caption" color="text.secondary" sx={{ textAlign: 'center' }}>
-                      {STATUS_LABEL[env?.payload?.from as keyof typeof STATUS_LABEL] || env?.payload?.from} → {STATUS_LABEL[env?.payload?.to as keyof typeof STATUS_LABEL] || env?.payload?.to}
-                      {env?.payload?.reason ? ` · ${env.payload.reason}` : ''}
-                    </Typography>
+                    <TimelineRow key={i} icon={<SwapHorizIcon sx={{ fontSize: 15 }} />} title="状态变更" time={time}>
+                      <Typography variant="body2" color="text.secondary">
+                        {STATUS_LABEL[env?.payload?.from as keyof typeof STATUS_LABEL] || env?.payload?.from} → {STATUS_LABEL[env?.payload?.to as keyof typeof STATUS_LABEL] || env?.payload?.to}
+                        {env?.payload?.reason ? ` · ${env.payload.reason}` : ''}
+                      </Typography>
+                    </TimelineRow>
                   )
                 case 'task.created':
-                  return <Typography key={i} variant="caption" color="text.secondary" sx={{ textAlign: 'center' }}>任务创建 · {fmtTime(env?.createdAt || '')}</Typography>
+                  return <TimelineRow key={i} icon={<PlayArrowIcon sx={{ fontSize: 14 }} />} tone="muted" title="任务创建" time={time} />
                 case 'run.started':
-                  return <RunDivider key={i} icon={<PlayArrowIcon sx={{ fontSize: 14 }} />} label={`Run 开始 · ${env?.payload?.agentName || ''} @ ${env?.payload?.nodeId === 'local' ? '本地节点' : '远程节点'}`} />
+                  return (
+                    <TimelineRow key={i} icon={<PlayArrowIcon sx={{ fontSize: 15 }} />} tone="primary"
+                      title={`Run 开始 · ${env?.payload?.agentName || ''}${env?.payload?.stageName ? ` · ${env.payload.stageName}` : ''}`} time={time}>
+                      <Typography variant="caption" color="text.secondary">
+                        {env?.payload?.nodeId === 'local' ? '本地节点' : '远程节点'}{env?.payload?.branch ? ` · ${env.payload.branch}` : ''}
+                      </Typography>
+                    </TimelineRow>
+                  )
                 case 'tool.call': {
                   const st = toolStatus.get(env?.payload?.toolCallId)
                   return (
-                    <Box key={i} sx={{ display: 'flex', gap: 1, alignItems: 'center', pl: 4.5 }}>
-                      <BuildIcon sx={{ fontSize: 14, color: 'text.secondary' }} />
-                      <Typography variant="caption" sx={{ flexGrow: 1, color: 'text.secondary' }}>{env?.payload?.title || env?.payload?.kind || '工具调用'}</Typography>
-                      <Chip size="small" label={st === 'completed' ? '完成' : st === 'failed' ? '失败' : st || '进行中'}
-                        color={st === 'completed' ? 'success' : st === 'failed' ? 'error' : 'default'} variant="outlined" sx={{ height: 18, fontSize: 10 }} />
-                    </Box>
+                    <TimelineRow key={i} icon={<BuildIcon sx={{ fontSize: 14 }} />} tone="muted" title={env?.payload?.title || env?.payload?.kind || '工具调用'} time={time}>
+                      <Box sx={{ display: 'flex', gap: 1, alignItems: 'center' }}>
+                        <Typography variant="caption" color="text.secondary" sx={{ flexGrow: 1, fontFamily: 'monospace' }}>{env?.payload?.kind || 'tool'}</Typography>
+                        <Chip size="small" label={st === 'completed' ? '完成' : st === 'failed' ? '失败' : st || '进行中'}
+                          color={st === 'completed' ? 'success' : st === 'failed' ? 'error' : 'default'} variant="outlined" sx={{ height: 18, fontSize: 10 }} />
+                      </Box>
+                    </TimelineRow>
                   )
                 }
                 case 'tool.result': return null
                 case 'plan.updated':
                   return (
-                    <Paper key={i} elevation={0} sx={{ p: 1.5, ml: 4.5, bgcolor: 'background.paper', border: '1px solid', borderColor: 'divider', borderRadius: 1.25 }}>
-                      <Box sx={{ display: 'flex', alignItems: 'center', gap: 0.75, mb: 1, color: 'text.secondary' }}>
-                        <ListAltOutlinedIcon sx={{ fontSize: 16 }} /><Typography variant="caption">执行计划</Typography>
-                      </Box>
-                      {(env?.payload?.entries || []).map((e: any, j: number) => (
-                        <Box key={j} sx={{ display: 'flex', alignItems: 'center', gap: 0.75, py: 0.25 }}>
-                          {e.status === 'completed' ? <CheckCircleIcon sx={{ fontSize: 16, color: 'success.main' }} /> : e.status === 'in_progress' ? <AutorenewIcon sx={{ fontSize: 16, color: 'primary.main' }} /> : <RadioButtonUncheckedIcon sx={{ fontSize: 16, color: 'text.disabled' }} />}
-                          <Typography variant="body2">{e.content}</Typography>
-                        </Box>
-                      ))}
-                    </Paper>
+                    <TimelineRow key={i} icon={<ListAltOutlinedIcon sx={{ fontSize: 15 }} />} title="执行计划" time={time}>
+                      <Paper elevation={0} sx={{ p: 1.5, bgcolor: 'background.paper', border: '1px solid', borderColor: 'divider', borderRadius: 1.25 }}>
+                        {(env?.payload?.entries || []).map((e: any, j: number) => (
+                          <Box key={j} sx={{ display: 'flex', alignItems: 'center', gap: 0.75, py: 0.25 }}>
+                            {e.status === 'completed' ? <CheckCircleIcon sx={{ fontSize: 16, color: 'success.main' }} /> : e.status === 'in_progress' ? <AutorenewIcon sx={{ fontSize: 16, color: 'primary.main' }} /> : <RadioButtonUncheckedIcon sx={{ fontSize: 16, color: 'text.disabled' }} />}
+                            <Typography variant="body2">{e.content}</Typography>
+                          </Box>
+                        ))}
+                      </Paper>
+                    </TimelineRow>
                   )
                 case 'permission.requested': {
                   const aid = env?.payload?.approvalId
                   const resolved = resolvedApprovals.has(aid)
                   return (
-                    <Alert key={i} severity="warning" sx={{ ml: 4.5 }} action={
-                      !resolved && (
-                        <Box sx={{ display: 'flex', gap: 0.5 }}>
-                          <Button size="small" color="success" variant="contained" onClick={() => action(() => post(`/approvals/${aid}/decide`, { decision: 'approve' }), '已批准')}>批准</Button>
-                          <Button size="small" color="error" variant="outlined" onClick={() => action(() => post(`/approvals/${aid}/decide`, { decision: 'reject' }), '已拒绝')}>拒绝</Button>
-                        </Box>
-                      )
-                    }>
-                      工具授权请求：{env?.payload?.request?.toolCall?.title || '未知操作'}{resolved ? '（已处理）' : ''}
-                    </Alert>
+                    <TimelineRow key={i} icon={<RateReviewIcon sx={{ fontSize: 15 }} />} tone="warning" title="工具授权请求" time={time}>
+                      <Alert severity="warning" action={
+                        !resolved && (
+                          <Box sx={{ display: 'flex', gap: 0.5 }}>
+                            <Button size="small" color="success" variant="contained" onClick={() => action(() => post(`/approvals/${aid}/decide`, { decision: 'approve' }), '已批准')}>批准</Button>
+                            <Button size="small" color="error" variant="outlined" onClick={() => action(() => post(`/approvals/${aid}/decide`, { decision: 'reject' }), '已拒绝')}>拒绝</Button>
+                          </Box>
+                        )
+                      }>
+                        {env?.payload?.request?.toolCall?.title || '未知操作'}{resolved ? '（已处理）' : ''}
+                      </Alert>
+                    </TimelineRow>
                   )
                 }
                 case 'permission.resolved':
-                  return <Typography key={i} variant="caption" color="text.secondary" sx={{ textAlign: 'center' }}>授权已{env?.payload?.decision === 'approve' ? '批准' : '拒绝'}</Typography>
+                  return (
+                    <TimelineRow key={i} icon={env?.payload?.decision === 'approve' ? <CheckCircleIcon sx={{ fontSize: 15 }} /> : <CancelIcon sx={{ fontSize: 15 }} />}
+                      tone={env?.payload?.decision === 'approve' ? 'success' : 'error'}
+                      title={`授权已${env?.payload?.decision === 'approve' ? '批准' : '拒绝'}`} time={time} />
+                  )
                 case 'watchdog.loop': case 'watchdog.stalled': case 'watchdog.hard_limit': case 'watchdog.no_progress': case 'watchdog.interrupted':
-                  return <Alert key={i} severity="error">质量阀 [{it.kind.split('.')[1]}]：{env?.payload?.diagnostics || env?.payload?.error || '触发熔断'}</Alert>
+                  return (
+                    <TimelineRow key={i} icon={<CancelIcon sx={{ fontSize: 15 }} />} tone="error" title={`质量阀触发 · ${it.kind.split('.')[1]}`} time={time}>
+                      <Alert severity="error">{env?.payload?.diagnostics || env?.payload?.error || '触发熔断'}</Alert>
+                    </TimelineRow>
+                  )
                 case 'pr.linked':
                   return (
-                    <Paper key={i} elevation={0} sx={{ p: 1.5, bgcolor: 'background.paper', border: '1px solid', borderColor: 'divider', borderRadius: 1.25 }}>
-                      <Box sx={{ display: 'flex', alignItems: 'center', gap: 0.75 }}>
-                        <LinkOutlinedIcon sx={{ fontSize: 17, color: 'primary.main' }} />
-                        <Typography variant="body2">PR/MR 已就绪（{env?.payload?.prState}）</Typography>
-                      </Box>
-                      {env?.payload?.prUrl && <Link href={env.payload.prUrl} target="_blank" rel="noreferrer" variant="body2">{env.payload.prUrl} <OpenInNewIcon sx={{ fontSize: 12 }} /></Link>}
-                    </Paper>
+                    <TimelineRow key={i} icon={<LinkOutlinedIcon sx={{ fontSize: 15 }} />} tone="primary" title="PR/MR 已就绪" time={time}>
+                      <Paper elevation={0} sx={{ p: 1.25, bgcolor: 'background.paper', border: '1px solid', borderColor: 'divider', borderRadius: 1.25 }}>
+                        <Box sx={{ display: 'flex', alignItems: 'center', gap: 0.75, mb: env?.payload?.prUrl ? 0.75 : 0 }}>
+                          <Chip size="small" label={env?.payload?.prState || 'open'} variant="outlined" sx={{ height: 20, fontSize: 10 }} />
+                          <Typography variant="caption" color="text.secondary">等待合并</Typography>
+                        </Box>
+                        {env?.payload?.prUrl && <Link href={env.payload.prUrl} target="_blank" rel="noreferrer" variant="body2" sx={{ wordBreak: 'break-all' }}>{env.payload.prUrl} <OpenInNewIcon sx={{ fontSize: 12 }} /></Link>}
+                      </Paper>
+                    </TimelineRow>
                   )
                 case 'pr.merged_detected':
-                  return <Alert key={i} severity="success">检测到 PR/MR 已合并，可以批准任务</Alert>
+                  return <TimelineRow key={i} icon={<CheckCircleIcon sx={{ fontSize: 15 }} />} tone="success" title="检测到 PR/MR 已合并" time={time} />
                 case 'comment.injected':
-                  return <Typography key={i} variant="caption" sx={{ textAlign: 'center', color: 'success.main' }}>引导评论已送达智能体</Typography>
+                  return <TimelineRow key={i} icon={<SendIcon sx={{ fontSize: 14 }} />} tone="success" title="引导评论已送达智能体" time={time} />
                 case 'workflow.started':
-                  return <RunDivider key={i} icon={<AccountTreeIcon sx={{ fontSize: 14 }} />} label={`工作流开始：${env?.payload?.workflowName || ''}`} />
-                case 'workflow.stage_completed':
-                  return <RunDivider key={i} icon={<AccountTreeIcon sx={{ fontSize: 14 }} />} label={`节点完成：${env?.payload?.stageName || env?.payload?.stageKey || ''}`} />
+                  return (
+                    <TimelineRow key={i} icon={<AccountTreeIcon sx={{ fontSize: 15 }} />} tone="primary" title={`工作流开始 · ${env?.payload?.workflowName || ''}`} time={time}>
+                      <Typography variant="caption" color="text.secondary">节点依赖满足后自动执行，可在上方查看实时状态。</Typography>
+                    </TimelineRow>
+                  )
+                case 'workflow.stage_completed': {
+                  const files: string[] = Array.isArray(env?.payload?.files) ? env.payload.files : []
+                  return (
+                    <TimelineRow key={i} icon={<CheckCircleIcon sx={{ fontSize: 15 }} />} tone="success"
+                      title={`节点完成 · ${env?.payload?.stageName || env?.payload?.stageKey || ''}`} time={time}>
+                      <Box sx={{ display: 'flex', gap: 0.75, flexWrap: 'wrap' }}>
+                        {env?.payload?.branch && <Chip size="small" variant="outlined" label={env.payload.branch} sx={{ height: 20, fontSize: 10 }} />}
+                        {env?.payload?.headSha && <Chip size="small" variant="outlined" label={env.payload.headSha.slice(0, 8)} sx={{ height: 20, fontSize: 10 }} />}
+                        {files.length > 0 && (
+                          <Tooltip title={files.join('\n')}>
+                            <Chip size="small" variant="outlined" label={`${files.length} 个文件`} sx={{ height: 20, fontSize: 10 }} />
+                          </Tooltip>
+                        )}
+                      </Box>
+                    </TimelineRow>
+                  )
+                }
                 case 'workflow.stage_skipped':
-                  return <Typography key={i} variant="caption" color="text.secondary" sx={{ textAlign: 'center' }}>节点已跳过：{env?.payload?.stageName || env?.payload?.stageKey}</Typography>
+                  return (
+                    <TimelineRow key={i} icon={<RadioButtonUncheckedIcon sx={{ fontSize: 15 }} />} tone="muted"
+                      title={`节点跳过 · ${env?.payload?.stageName || env?.payload?.stageKey || ''}`} time={time}>
+                      {env?.payload?.reason && <Typography variant="caption" color="text.secondary">条件：{env.payload.reason}</Typography>}
+                    </TimelineRow>
+                  )
                 case 'workflow.stage_failed':
-                  return <Alert key={i} severity="error">节点失败：{env?.payload?.stageName || env?.payload?.stageKey} · {env?.payload?.error || env?.payload?.reason || ''}</Alert>
+                  return (
+                    <TimelineRow key={i} icon={<CancelIcon sx={{ fontSize: 15 }} />} tone="error"
+                      title={`节点失败 · ${env?.payload?.stageName || env?.payload?.stageKey || ''}`} time={time}>
+                      <Alert severity="error">{env?.payload?.error || env?.payload?.reason || '节点执行失败'}</Alert>
+                    </TimelineRow>
+                  )
                 case 'workflow.completed':
-                  return <Alert key={i} severity="success">工作流全部节点已完成，等待审核</Alert>
+                  return (
+                    <TimelineRow key={i} icon={<CheckCircleIcon sx={{ fontSize: 15 }} />} tone="success" title="工作流全部完成" time={time}>
+                      <Typography variant="caption" color="text.secondary">所有节点已完成，任务进入审核。</Typography>
+                    </TimelineRow>
+                  )
                 case 'workflow.rewound':
-                  return <Typography key={i} variant="caption" color="text.secondary" sx={{ textAlign: 'center' }}>从节点「{env?.payload?.fromStage}」返工</Typography>
+                  return (
+                    <TimelineRow key={i} icon={<AutorenewIcon sx={{ fontSize: 15 }} />} tone="warning" title={`返工 · 从「${env?.payload?.fromStage || ''}」开始`} time={time}>
+                      <Typography variant="caption" color="text.secondary">该节点及其下游已重置，等待重新执行。</Typography>
+                    </TimelineRow>
+                  )
                 case 'workflow.rework_reset':
-                  return <Typography key={i} variant="caption" color="text.secondary" sx={{ textAlign: 'center' }}>返工：已重置汇点节点，等待重跑</Typography>
+                  return <TimelineRow key={i} icon={<AutorenewIcon sx={{ fontSize: 15 }} />} tone="warning" title="返工重置" time={time}>
+                    <Typography variant="caption" color="text.secondary">已重置汇点节点，等待重跑。</Typography>
+                  </TimelineRow>
                 case 'workflow.retry_reset':
-                  return <Typography key={i} variant="caption" color="text.secondary" sx={{ textAlign: 'center' }}>解除阻塞：失败节点已重置，等待重新执行</Typography>
+                  return <TimelineRow key={i} icon={<AutorenewIcon sx={{ fontSize: 15 }} />} tone="warning" title="失败节点已重置" time={time}>
+                    <Typography variant="caption" color="text.secondary">解除阻塞后失败节点将重新执行。</Typography>
+                  </TimelineRow>
                 default:
-                  return <Typography key={i} variant="caption" color="text.secondary">{it.kind} · {fmtTime(env?.createdAt || '')}</Typography>
+                  return <TimelineRow key={i} icon={<RadioButtonUncheckedIcon sx={{ fontSize: 14 }} />} tone="muted" title={it.kind} time={time} />
               }
-            })}
+                })}
+              </Box>
+            )}
             <div ref={bottomRef} />
           </Box>
           <Box sx={{ p: 2, borderTop: '1px solid', borderColor: 'divider', bgcolor: '#fafbfc', flexShrink: 0 }}>
@@ -438,11 +518,111 @@ export default function TaskPage() {
   )
 }
 
-function RunDivider({ label, icon }: { label: string; icon?: React.ReactNode }) {
+const TIMELINE_TONE = {
+  default: { color: '#697386', bg: '#f1f2f6' },
+  primary: { color: '#635bff', bg: '#eceaff' },
+  success: { color: '#16a34a', bg: '#e9f8ef' },
+  warning: { color: '#b45309', bg: '#fff6e6' },
+  error: { color: '#d85160', bg: '#fdeef0' },
+  muted: { color: '#8b93a7', bg: '#f4f5f8' },
+} as const
+
+function TimelineRow({ icon, node, tone = 'default', title, time, children }: {
+  icon?: React.ReactNode; node?: React.ReactNode; tone?: keyof typeof TIMELINE_TONE
+  title: string; time?: string; children?: React.ReactNode
+}) {
+  const t = TIMELINE_TONE[tone]
   return (
-    <Divider sx={{ my: 1.5 }}>
-      <Chip size="small" icon={icon as any} label={label} variant="outlined" sx={{ color: 'text.secondary', height: 22 }} />
-    </Divider>
+    <Box sx={{ position: 'relative', display: 'flex', gap: 1.5, pb: 2.25 }}>
+      <Box sx={{ position: 'relative', zIndex: 1, width: 28, flexShrink: 0, display: 'flex', justifyContent: 'center', pt: 0.25 }}>
+        {node || (
+          <Box sx={{
+            width: 26, height: 26, borderRadius: '50%', bgcolor: t.bg, color: t.color,
+            display: 'grid', placeItems: 'center', border: '2px solid #fff', boxShadow: '0 0 0 1px #e6e8ef',
+          }}>{icon}</Box>
+        )}
+      </Box>
+      <Box sx={{ flexGrow: 1, minWidth: 0, pt: 0.25 }}>
+        <Box sx={{ display: 'flex', alignItems: 'center', gap: 1 }}>
+          <Typography variant="body2" fontWeight={650} sx={{ lineHeight: 1.4, minWidth: 0, wordBreak: 'break-word' }}>{title}</Typography>
+          {time && <Typography variant="caption" color="text.secondary" sx={{ ml: 'auto', flexShrink: 0, fontVariantNumeric: 'tabular-nums' }}>{time}</Typography>}
+        </Box>
+        {children && <Box sx={{ mt: 1 }}>{children}</Box>}
+      </Box>
+    </Box>
+  )
+}
+
+/** 按节点取最新 Run，供流程图与时间轴共用。 */
+function useStageStatus(runs: Run[]) {
+  return useMemo(() => {
+    const latest = new Map<string, Run>()
+    for (const r of runs) if (r.stageKey) latest.set(r.stageKey, r)
+    const statusOf = (key: string) => {
+      const r = latest.get(key)
+      if (!r) return 'pending'
+      if (r.status === 'finished') return 'succeeded'
+      if (r.status === 'running') return 'running'
+      if (r.status === 'skipped') return 'skipped'
+      if (r.status === 'cancelled') return 'cancelled'
+      return 'failed'
+    }
+    const metaOf = (key: string) => {
+      const r = latest.get(key)
+      if (!r) return undefined
+      return `${r.turnCount} 轮${r.retryCount > 0 ? ` · 重试 #${r.retryCount}` : ''}${r.headSha ? ` · ${r.headSha.slice(0, 8)}` : ''}`
+    }
+    return { latest, statusOf, metaOf }
+  }, [runs])
+}
+
+/** 任务详情内嵌的工作流状态面板。 */
+function WorkflowStatusPanel({ workflow, runs, projects, agents, taskStatus, onDetail }: {
+  workflow: Workflow; runs: Run[]; projects: Project[]; agents: Agent[]; taskStatus: string; onDetail: () => void
+}) {
+  const [open, setOpen] = useState(true)
+  const stages = useMemo(() => autoLayout(parseJson<WorkflowStage[]>(workflow.stages, [])), [workflow.stages])
+  const { statusOf, metaOf } = useStageStatus(runs)
+  const done = stages.filter(s => ['succeeded', 'skipped'].includes(statusOf(s.key))).length
+  const failed = stages.some(s => ['failed', 'cancelled'].includes(statusOf(s.key)))
+  const running = stages.some(s => statusOf(s.key) === 'running')
+  const allDone = stages.length > 0 && done === stages.length
+  const pct = stages.length ? Math.round((done / stages.length) * 100) : 0
+  const summary = failed ? '存在失败节点' : running ? '正在执行' : allDone ? '全部完成' : taskStatus === 'in_progress' ? '等待节点就绪' : '未开始'
+  const barColor: 'error' | 'success' | 'primary' = failed ? 'error' : allDone ? 'success' : 'primary'
+  const contentBottom = Math.max(0, ...stages.map(s => (s.y ?? 0) + NODE_H))
+  const canvasHeight = Math.min(380, Math.max(240, contentBottom + 72))
+  return (
+    <Paper elevation={0} sx={{ mb: 2.5, border: '1px solid', borderColor: 'divider', borderRadius: 1.25, overflow: 'hidden' }}>
+      <Box sx={{ px: 2, py: 1.25, display: 'flex', alignItems: 'center', gap: 1, bgcolor: '#fafbfc' }}>
+        <AccountTreeIcon sx={{ fontSize: 18, color: 'primary.main' }} />
+        <Typography variant="subtitle2" sx={{ flexGrow: 1 }}>工作流状态</Typography>
+        <Chip size="small" variant="outlined" label={`${done}/${stages.length} 节点`}
+          color={failed ? 'error' : allDone ? 'success' : 'default'} sx={{ height: 22 }} />
+        <Chip size="small" label={summary} color={failed ? 'error' : running ? 'primary' : 'default'} sx={{ height: 22 }} />
+        <Button size="small" onClick={onDetail}>流程详情</Button>
+        <IconButton size="small" onClick={() => setOpen(v => !v)} aria-label={open ? '收起工作流状态' : '展开工作流状态'}>
+          {open ? <ExpandLessIcon fontSize="small" /> : <ExpandMoreIcon fontSize="small" />}
+        </IconButton>
+      </Box>
+      <LinearProgress variant="determinate" value={pct} color={barColor} sx={{ height: 3 }} />
+      {open && (
+        <>
+          <Box sx={{ display: 'flex', gap: 2, px: 2, py: 1, flexWrap: 'wrap', borderBottom: '1px solid', borderColor: 'divider', bgcolor: '#fff' }}>
+            {([['succeeded', '已完成', '#16a34a'], ['running', '执行中', '#635bff'], ['pending', '待执行', '#a0a7b5'], ['failed', '失败', '#d85160'], ['skipped', '已跳过', '#8b93a7']] as const).map(([k, label, color]) => (
+              <Box key={k} sx={{ display: 'flex', alignItems: 'center', gap: 0.5 }}>
+                <Box sx={{ width: 6, height: 6, borderRadius: '50%', bgcolor: color }} />
+                <Typography variant="caption" color="text.secondary">{label}</Typography>
+              </Box>
+            ))}
+          </Box>
+          <Box sx={{ height: canvasHeight }}>
+            <WorkflowCanvas readonly stages={stages} agents={agents} projects={projects} selected={null}
+              onChange={() => {}} onSelect={() => {}} statusOf={statusOf} metaOf={metaOf} />
+          </Box>
+        </>
+      )}
+    </Paper>
   )
 }
 
@@ -490,18 +670,8 @@ function WorkflowFlowPanel({ workflow, runs, projects, agents, taskStatus, isAdm
   workflow: Workflow; runs: Run[]; projects: Project[]; agents: Agent[]; taskStatus: string; isAdmin: boolean
   onRewind: (key: string) => void; onSkip: (key: string) => void
 }) {
-  const stages = parseJson<WorkflowStage[]>(workflow.stages, [])
-  const latest = new Map<string, Run>()
-  for (const r of runs) if (r.stageKey) latest.set(r.stageKey, r)
-  const stateOf = (key: string) => {
-    const r = latest.get(key)
-    if (!r) return 'pending'
-    if (r.status === 'finished') return 'succeeded'
-    if (r.status === 'running') return 'running'
-    if (r.status === 'skipped') return 'skipped'
-    if (r.status === 'cancelled') return 'cancelled'
-    return 'failed'
-  }
+  const stages = useMemo(() => autoLayout(parseJson<WorkflowStage[]>(workflow.stages, [])), [workflow.stages])
+  const { latest, statusOf, metaOf } = useStageStatus(runs)
   const levelOf = (s: WorkflowStage, depth = 0): number => {
     if (depth > 20 || s.dependsOn.length === 0) return 0
     return 1 + Math.max(...s.dependsOn.map(k => { const d = stages.find(x => x.key === k); return d ? levelOf(d, depth + 1) : 0 }))
@@ -510,20 +680,6 @@ function WorkflowFlowPanel({ workflow, runs, projects, agents, taskStatus, isAdm
   for (const s of stages) {
     const lv = levelOf(s)
     levels.set(lv, [...(levels.get(lv) || []), s])
-  }
-  const statusOf = (key: string) => {
-    const r = latest.get(key)
-    if (!r) return 'pending'
-    if (r.status === 'finished') return 'succeeded'
-    if (r.status === 'running') return 'running'
-    if (r.status === 'skipped') return 'skipped'
-    if (r.status === 'cancelled') return 'cancelled'
-    return 'failed'
-  }
-  const metaOf = (key: string) => {
-    const r = latest.get(key)
-    if (!r) return undefined
-    return `${r.turnCount} 轮${r.retryCount > 0 ? ` · 重试 #${r.retryCount}` : ''}${r.headSha ? ` · ${r.headSha.slice(0, 8)}` : ''}`
   }
   return (
     <Box sx={{ flexGrow: 1, minHeight: 0, overflowY: 'auto', p: { xs: 2, md: 3 } }}>
@@ -544,7 +700,7 @@ function WorkflowFlowPanel({ workflow, runs, projects, agents, taskStatus, isAdm
             <Typography variant="caption" color="text.secondary" sx={{ mb: 0.75, display: 'block' }}>第 {lv + 1} 层</Typography>
             <Box sx={{ display: 'grid', gap: 1.25, gridTemplateColumns: { xs: '1fr', md: 'repeat(auto-fill, minmax(240px, 1fr))' } }}>
               {levels.get(lv)!.map(s => {
-                const st = stateOf(s.key)
+                const st = statusOf(s.key)
                 const r = latest.get(s.key)
                 return (
                   <Paper key={s.key} elevation={0} sx={{ p: 1.5, border: '1px solid', borderColor: 'divider', borderRadius: 1.25 }}>

@@ -75,7 +75,7 @@ export default function WorkflowCanvas({ stages, agents, projects, selected, onC
   }, [stages])
 
   const maxX = Math.max(760, ...stages.map(s => (positions.get(s.key)?.x || 0) + NODE_W + 80))
-  const maxY = Math.max(460, ...stages.map(s => (positions.get(s.key)?.y || 0) + NODE_H + 80))
+  const maxY = Math.max(readonly ? 240 : 460, ...stages.map(s => (positions.get(s.key)?.y || 0) + NODE_H + 80))
 
   const point = (e: React.PointerEvent): { x: number; y: number } => {
     const rect = canvasRef.current?.getBoundingClientRect()
@@ -140,7 +140,7 @@ export default function WorkflowCanvas({ stages, agents, projects, selected, onC
   for (const s of stages) for (const d of s.dependsOn) if (positions.has(d)) edges.push({ from: d, to: s.key })
 
   return (
-      <Box sx={{ display: 'flex', flexDirection: 'column', height: '100%', minHeight: readonly ? 300 : 460 }}>
+      <Box sx={{ display: 'flex', flexDirection: 'column', height: '100%', minHeight: readonly ? 240 : 460 }}>
       {!readonly && (
       <Box sx={{ display: 'flex', alignItems: 'center', gap: 1, px: 2, py: 1.25, borderBottom: '1px solid', borderColor: 'divider', bgcolor: '#fafbfc' }}>
         <Button size="small" startIcon={<AddIcon />} onClick={addNode}>添加节点</Button>
