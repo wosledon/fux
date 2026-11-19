@@ -11,7 +11,7 @@
 | `tests/api.rs`           | `e2e_mock_agent_delivery`               | 真实拉起 mock agent：认领 → 时间线事件 → git 提交 → 审核中                          |
 | `tests/api.rs`           | `e2e_interrupt_retry_then_block`        | 中断自动重试 2 次后阻塞                                                             |
 | `tests/api.rs`           | `watchdog_loop_trip`                    | 5 条相同工具调用触发质量阀熔断                                                      |
-| `tests/api.rs`          | `workflow_dag_run_and_rewind`           | 工作流 DAG 校验、两节点自动推进、节点产物、交付生成、驳回重跑、从节点返工     |
+| `tests/api.rs`           | `workflow_dag_run_and_rewind`           | 工作流 DAG 校验、两节点自动推进、节点产物、交付生成、驳回重跑、从节点返工           |
 | `src/server/domain.rs`   | `transition_table` / `user_permissions` | T1–T11 合法性与用户子集                                                             |
 | `src/server/workflow.rs` | `validate_dag` / `readiness_and_sinks`  | DAG 校验、就绪判定、汇点与下游集                                                    |
 | `src/git.rs`             | 单元测试                                | PR/MR 链接推导等纯函数                                                              |

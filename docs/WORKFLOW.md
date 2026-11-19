@@ -114,13 +114,13 @@ for 节点 in 模板顺序:
 
 ### 2.5 返工、跳过与解除阻塞
 
-| 场景 | 行为 |
-| --- | --- |
-| 审核驳回（review → ready） | 删除**汇点节点**的 runs 与 deliveries（上游保留），重跑只覆盖最终交付；事件 `workflow.rework_reset` |
-| 已完成返工（done → ready，评论触发） | 同上，重置汇点节点 |
-| 从节点 N 返工（blocked / review / done） | 取消运行中的 Run，删除 N 及其下游的 runs 与 deliveries；事件 `workflow.rewound`，任务回 ready |
-| 人工跳过（in_progress） | 取消该节点运行中的 Run，写入一条 `skipped` run（覆盖旧 Run），继续推进下游 |
-| 解除阻塞（blocked → ready/in_progress） | 删除 `failed` / `cancelled` 的 runs（保留成功节点），使失败节点可重新派发；事件 `workflow.retry_reset` |
+| 场景                                     | 行为                                                                                                   |
+| ---------------------------------------- | ------------------------------------------------------------------------------------------------------ |
+| 审核驳回（review → ready）               | 删除**汇点节点**的 runs 与 deliveries（上游保留），重跑只覆盖最终交付；事件 `workflow.rework_reset`    |
+| 已完成返工（done → ready，评论触发）     | 同上，重置汇点节点                                                                                     |
+| 从节点 N 返工（blocked / review / done） | 取消运行中的 Run，删除 N 及其下游的 runs 与 deliveries；事件 `workflow.rewound`，任务回 ready          |
+| 人工跳过（in_progress）                  | 取消该节点运行中的 Run，写入一条 `skipped` run（覆盖旧 Run），继续推进下游                             |
+| 解除阻塞（blocked → ready/in_progress）  | 删除 `failed` / `cancelled` 的 runs（保留成功节点），使失败节点可重新派发；事件 `workflow.retry_reset` |
 
 > 所有删除都保留 `task_events` 历史；节点状态始终以「最新 Run」为准。
 
