@@ -3,8 +3,11 @@ fux mock output
 
 走一遍工作流
 
-## 当前工作流节点：设计
-先写设计稿
+## 当前工作流节点：开发
+
+## 上游产物（已检出到 .fux/upstream/<节点 key>，只读参考）
+- design（Fux 仓库）分支 fux/task-4bf77154/design @ d9384053
+  路径: .fux/upstream/design
 
 
 完成后请确保变更已提交到当前 git 分支（fux 任务分支）。
