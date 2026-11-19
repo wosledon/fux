@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useRef, useState } from 'react'
+import { memo, useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from 'react'
 import { useNavigate, useOutletContext } from 'react-router-dom'
 import { useQuery, useQueryClient } from '@tanstack/react-query'
 import { DndContext, DragOverlay, PointerSensor, useSensor, useSensors, useDraggable, useDroppable, type DragEndEvent, type DragOverEvent, type DragStartEvent } from '@dnd-kit/core'
@@ -151,13 +151,13 @@ function CardBody({ task, agents, workflows, projects, types }: {
   )
 }
 
-function TaskCard({ task, agents, workflows, projects, types, onOpen }: {
-  task: Task; agents: Agent[]; workflows: Workflow[]; projects: Project[]; types: TaskType[]; onOpen: () => void
+function TaskCardInner({ task, agents, workflows, projects, types, onOpen }: {
+  task: Task; agents: Agent[]; workflows: Workflow[]; projects: Project[]; types: TaskType[]; onOpen: (id: string) => void
 }) {
   const { attributes, listeners, setNodeRef, isDragging } = useDraggable({ id: task.id })
   const running = task.status === 'in_progress'
   return (
-    <Paper ref={setNodeRef} {...listeners} {...attributes} onClick={onOpen}
+    <Paper ref={setNodeRef} {...listeners} {...attributes} onClick={() => onOpen(task.id)}
       sx={{
         p: 1.75, mb: 1.25, cursor: 'grab', opacity: isDragging ? 0.35 : 1,
         bgcolor: '#ffffff', borderRadius: 1.5, boxShadow: '0 1px 3px rgba(29,36,58,0.07)',
@@ -183,6 +183,7 @@ function TaskCard({ task, agents, workflows, projects, types, onOpen }: {
               content: '""', position: 'absolute', left: '-50%', top: '-50%', width: '200%', height: '200%',
               background: 'conic-gradient(from 0deg, transparent 0deg 170deg, rgba(99,91,255,0.45) 240deg, #9487ff 295deg, rgba(99,91,255,0) 345deg)',
               animation: 'fuxSpin 7s linear infinite reverse',
+              willChange: 'transform',
             },
           }} />
           <Box aria-hidden sx={{
@@ -197,6 +198,7 @@ function TaskCard({ task, agents, workflows, projects, types, onOpen }: {
               content: '""', position: 'absolute', left: '-50%', top: '-50%', width: '200%', height: '200%',
               background: 'conic-gradient(from 0deg, transparent 0deg 205deg, rgba(99,91,255,0.35) 235deg, #635bff 275deg, #b3a6ff 305deg, #ffffff 318deg, transparent 335deg)',
               animation: 'fuxSpin 2.6s linear infinite',
+              willChange: 'transform',
             },
           }} />
         </>
@@ -208,7 +210,9 @@ function TaskCard({ task, agents, workflows, projects, types, onOpen }: {
   )
 }
 
-function LaneColumn({ lane, tasks, agents, workflows, projects, types, onOpen, onCreate, dropState }: {
+const TaskCard = memo(TaskCardInner)
+
+function LaneColumnInner({ lane, tasks, agents, workflows, projects, types, onOpen, onCreate, dropState }: {
   lane: Lane; tasks: Task[]; agents: Agent[]; workflows: Workflow[]; projects: Project[]; types: TaskType[]
   onOpen: (id: string) => void; onCreate: () => void; dropState: 'ok' | 'bad' | null
 }) {
@@ -236,7 +240,7 @@ function LaneColumn({ lane, tasks, agents, workflows, projects, types, onOpen, o
         )}
       </Box>
       <Box sx={{ p: 1, overflowY: 'auto', flexGrow: 1 }}>
-        {tasks.map(t => <TaskCard key={t.id} task={t} agents={agents} workflows={workflows} projects={projects} types={types} onOpen={() => onOpen(t.id)} />)}
+        {tasks.map(t => <TaskCard key={t.id} task={t} agents={agents} workflows={workflows} projects={projects} types={types} onOpen={onOpen} />)}
         {tasks.length === 0 && (
           <Box sx={{ textAlign: 'center', py: 4, px: 2, color: 'text.secondary' }}>
             <Box sx={{ opacity: 0.4, mb: 1 }}>{hint?.icon}</Box>
@@ -244,6 +248,69 @@ function LaneColumn({ lane, tasks, agents, workflows, projects, types, onOpen, o
           </Box>
         )}
       </Box>
+    </Box>
+  )
+}
+
+const LaneColumn = memo(LaneColumnInner)
+
+// 泳道横向滚动区：滚动状态只在本组件内更新，翻页按钮显隐不再重渲染整个看板
+function BoardScroller({ children, contentKey }: { children: ReactNode; contentKey: string }) {
+  const ref = useRef<HTMLDivElement>(null)
+  const raf = useRef(0)
+  const [state, setState] = useState({ left: false, right: false })
+
+  const update = useCallback(() => {
+    if (raf.current) return
+    raf.current = requestAnimationFrame(() => {
+      raf.current = 0
+      const el = ref.current
+      if (!el) return
+      const left = el.scrollLeft > 4
+      const right = el.scrollLeft + el.clientWidth < el.scrollWidth - 4
+      setState(s => s.left === left && s.right === right ? s : { left, right })
+    })
+  }, [])
+
+  useEffect(() => {
+    const el = ref.current
+    if (!el) return
+    update()
+    el.addEventListener('scroll', update, { passive: true })
+    const ro = new ResizeObserver(update)
+    ro.observe(el)
+    return () => {
+      el.removeEventListener('scroll', update)
+      ro.disconnect()
+      if (raf.current) {
+        cancelAnimationFrame(raf.current)
+        raf.current = 0
+      }
+    }
+  }, [update, contentKey])
+
+  const scroll = (dir: -1 | 1) => {
+    const el = ref.current
+    if (!el) return
+    // 一次切换一屏左右的距离，保持平滑滚动但不过长
+    el.scrollBy({ left: dir * Math.max(280, el.clientWidth * 0.6), behavior: 'smooth' })
+  }
+
+  return (
+    <Box sx={{ position: 'relative', display: 'flex', flexGrow: 1, minHeight: 0 }}>
+      <Box ref={ref} sx={{ display: 'flex', gap: 2, px: { xs: 2, md: 3.5 }, pb: 3.5, overflowX: 'auto', flexGrow: 1, minHeight: 0 }}>
+        {children}
+      </Box>
+      {state.left && (
+        <IconButton aria-label="向左查看更多泳道" onClick={() => scroll(-1)} sx={scrollButtonSx('left')}>
+          <ChevronLeftIcon fontSize="small" />
+        </IconButton>
+      )}
+      {state.right && (
+        <IconButton aria-label="向右查看更多泳道" onClick={() => scroll(1)} sx={scrollButtonSx('right')}>
+          <ChevronRightIcon fontSize="small" />
+        </IconButton>
+      )}
     </Box>
   )
 }
@@ -266,14 +333,22 @@ export default function BoardPage() {
   const [search, setSearch] = useState('')
   const [activeTask, setActiveTask] = useState<Task | null>(null)
   const [hoverLane, setHoverLane] = useState<{ id: string; ok: boolean } | null>(null)
-  const boardScrollRef = useRef<HTMLDivElement>(null)
-  const [scrollState, setScrollState] = useState({ left: false, right: false })
   const sensors = useSensors(useSensor(PointerSensor, { activationConstraint: { distance: 6 } }))
 
   const lanes = useMemo(() => (boardData?.lanes || []).slice().sort((a, b) => a.position - b.position), [boardData])
-  const filtered = tasks.filter(t =>
+  const filtered = useMemo(() => tasks.filter(t =>
     (!filterProject || t.projectId === filterProject) &&
-    (!search || t.title.toLowerCase().includes(search.toLowerCase())))
+    (!search || t.title.toLowerCase().includes(search.toLowerCase()))), [tasks, filterProject, search])
+  const laneTasks = useMemo(() => {
+    const map = new Map<string, Task[]>()
+    for (const lane of lanes) {
+      map.set(lane.id, filtered.filter(t =>
+        t.laneId === lane.id || (!t.laneId && lane.kind === (t.status === 'in_progress' ? 'work' : t.status))))
+    }
+    return map
+  }, [lanes, filtered])
+  const openTask = useCallback((id: string) => nav(`/ws/${wsId}/tasks/${id}`), [nav, wsId])
+  const openCreate = useCallback(() => setCreateOpen(true), [])
   const stats = useMemo(() => ({
     doing: tasks.filter(t => t.status === 'in_progress').length,
     review: tasks.filter(t => t.status === 'review').length,
@@ -281,30 +356,6 @@ export default function BoardPage() {
   }), [tasks])
 
   const invalidate = () => { qc.invalidateQueries({ queryKey: ['tasks', boardId] }) }
-
-  const updateScrollState = () => {
-    const el = boardScrollRef.current
-    if (!el) return
-    setScrollState({
-      left: el.scrollLeft > 4,
-      right: el.scrollLeft + el.clientWidth < el.scrollWidth - 4,
-    })
-  }
-  useEffect(() => {
-    const el = boardScrollRef.current
-    if (!el) return
-    updateScrollState()
-    el.addEventListener('scroll', updateScrollState, { passive: true })
-    const ro = new ResizeObserver(updateScrollState)
-    ro.observe(el)
-    return () => { el.removeEventListener('scroll', updateScrollState); ro.disconnect() }
-  }, [lanes.length, filtered.length])
-
-  const scrollBoard = (dir: -1 | 1) => {
-    const el = boardScrollRef.current
-    if (!el) return
-    el.scrollBy({ left: dir * Math.round(el.clientWidth * 0.8), behavior: 'smooth' })
-  }
 
   const onDragStart = (e: DragStartEvent) => setActiveTask(tasks.find(t => t.id === String(e.active.id)) || null)
   const onDragOver = (e: DragOverEvent) => {
@@ -370,26 +421,14 @@ export default function BoardPage() {
         </Box>
       </Box>
       <DndContext sensors={sensors} onDragStart={onDragStart} onDragOver={onDragOver} onDragEnd={onDragEnd} onDragCancel={() => { setActiveTask(null); setHoverLane(null) }}>
-        <Box sx={{ position: 'relative', display: 'flex', flexGrow: 1, minHeight: 0 }}>
-          <Box ref={boardScrollRef} sx={{ display: 'flex', gap: 2, px: { xs: 2, md: 3.5 }, pb: 3.5, overflowX: 'auto', flexGrow: 1, minHeight: 0 }}>
-            {lanes.map(lane => (
-              <LaneColumn key={lane.id} lane={lane} agents={agents} workflows={workflows} projects={projects} types={types}
-                tasks={filtered.filter(t => t.laneId === lane.id || (!t.laneId && lane.kind === (t.status === 'in_progress' ? 'work' : t.status)))}
-                onOpen={id => nav(`/ws/${wsId}/tasks/${id}`)} onCreate={() => setCreateOpen(true)}
-                dropState={hoverLane?.id === lane.id ? (hoverLane.ok ? 'ok' : 'bad') : null} />
-            ))}
-          </Box>
-          {scrollState.left && (
-            <IconButton aria-label="向左查看更多泳道" onClick={() => scrollBoard(-1)} sx={scrollButtonSx('left')}>
-              <ChevronLeftIcon fontSize="small" />
-            </IconButton>
-          )}
-          {scrollState.right && (
-            <IconButton aria-label="向右查看更多泳道" onClick={() => scrollBoard(1)} sx={scrollButtonSx('right')}>
-              <ChevronRightIcon fontSize="small" />
-            </IconButton>
-          )}
-        </Box>
+        <BoardScroller contentKey={`${lanes.length}:${filtered.length}`}>
+          {lanes.map(lane => (
+            <LaneColumn key={lane.id} lane={lane} agents={agents} workflows={workflows} projects={projects} types={types}
+              tasks={laneTasks.get(lane.id) || []}
+              onOpen={openTask} onCreate={openCreate}
+              dropState={hoverLane?.id === lane.id ? (hoverLane.ok ? 'ok' : 'bad') : null} />
+          ))}
+        </BoardScroller>
         <DragOverlay dropAnimation={null}>
           {activeTask && (
             <Paper sx={{ p: 1.75, width: 288, transform: 'rotate(1.5deg)', boxShadow: '0 18px 48px rgba(29,36,58,0.22)', borderRadius: 1.5, cursor: 'grabbing' }}>
