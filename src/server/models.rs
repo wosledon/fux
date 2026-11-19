@@ -128,6 +128,12 @@ pub struct Task {
     pub stage_total: Option<i64>,
     #[sqlx(default)]
     pub stage_done: Option<i64>,
+    #[sqlx(default)]
+    pub comment_count: Option<i64>,
+    #[sqlx(default)]
+    pub run_count: Option<i64>,
+    #[sqlx(default)]
+    pub last_run_status: Option<String>,
 }
 
 #[derive(Debug, Clone, FromRow, Serialize)]

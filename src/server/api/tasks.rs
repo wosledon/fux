@@ -100,6 +100,30 @@ async fn list(
         .to_string();
     rows.retain(|t| t.status != "archived" || t.updated_at >= cutoff);
     for t in rows.iter_mut() {
+        t.comment_count = Some(
+            sqlx::query_scalar(
+                "SELECT COUNT(*) FROM task_events WHERE task_id = ? AND kind = 'comment.added'",
+            )
+            .bind(&t.id)
+            .fetch_one(&state.db)
+            .await
+            .unwrap_or(0),
+        );
+        t.run_count = Some(
+            sqlx::query_scalar("SELECT COUNT(*) FROM runs WHERE task_id = ?")
+                .bind(&t.id)
+                .fetch_one(&state.db)
+                .await
+                .unwrap_or(0),
+        );
+        t.last_run_status = sqlx::query_scalar(
+            "SELECT status FROM runs WHERE task_id = ? ORDER BY started_at DESC LIMIT 1",
+        )
+        .bind(&t.id)
+        .fetch_optional(&state.db)
+        .await
+        .ok()
+        .flatten();
         let Some(wid) = &t.workflow_id else { continue };
         if let Ok(wf) = crate::server::workflow::load(&state, wid).await {
             let stages = crate::server::workflow::parse_stages(&wf).unwrap_or_default();

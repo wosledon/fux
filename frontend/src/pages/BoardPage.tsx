@@ -1,14 +1,19 @@
-import { useMemo, useState } from 'react'
+import { useEffect, useMemo, useRef, useState } from 'react'
 import { useNavigate, useOutletContext } from 'react-router-dom'
 import { useQuery, useQueryClient } from '@tanstack/react-query'
 import { DndContext, DragOverlay, PointerSensor, useSensor, useSensors, useDraggable, useDroppable, type DragEndEvent, type DragOverEvent, type DragStartEvent } from '@dnd-kit/core'
 import { Box, Typography, Chip, Paper, Button, IconButton, Dialog, DialogTitle, DialogContent, DialogActions, TextField, MenuItem, Tooltip, InputAdornment, Divider } from '@mui/material'
 import AddIcon from '@mui/icons-material/Add'
 import SearchIcon from '@mui/icons-material/Search'
+import ChevronLeftIcon from '@mui/icons-material/ChevronLeft'
+import ChevronRightIcon from '@mui/icons-material/ChevronRight'
 import FlagIcon from '@mui/icons-material/Flag'
 import MergeIcon from '@mui/icons-material/Merge'
 import ErrorOutlineIcon from '@mui/icons-material/ErrorOutline'
 import SmartToyIcon from '@mui/icons-material/SmartToy'
+import ChatBubbleOutlineIcon from '@mui/icons-material/ChatBubbleOutline'
+import HistoryIcon from '@mui/icons-material/History'
+import FolderOutlinedIcon from '@mui/icons-material/FolderOutlined'
 import AccountTreeIcon from '@mui/icons-material/AccountTree'
 import CategoryIcon from '@mui/icons-material/Category'
 import InboxIcon from '@mui/icons-material/Inbox'
@@ -47,64 +52,151 @@ function dropPlan(task: Task, lane: Lane): DropPlan {
   return { ok: false, reason: reasons[lane.kind] || '该状态转移不被允许' }
 }
 
-function CardBody({ task, agents, workflows }: { task: Task; agents: Agent[]; workflows: Workflow[] }) {
+function CardBody({ task, agents, workflows, projects, types }: {
+  task: Task; agents: Agent[]; workflows: Workflow[]; projects: Project[]; types: TaskType[]
+}) {
   const assignee = task.assigneeAgentId ? agents.find(a => a.id === task.assigneeAgentId)?.name : undefined
   const workflowName = task.workflowId ? workflows.find(w => w.id === task.workflowId)?.name : undefined
   const workflowLabel = task.workflowId
     ? `${workflowName || '工作流'}${task.stageTotal ? ` · ${task.stageDone || 0}/${task.stageTotal}` : ''}`
     : undefined
+  const projectName = task.projectId ? projects.find(p => p.id === task.projectId)?.name : undefined
+  const type = task.typeId ? types.find(t => t.id === task.typeId) : undefined
   const tags = parseJson<string[]>(task.tags, [])
+  const running = task.status === 'in_progress' && task.lastRunStatus === 'running'
   return (
     <>
-      <Box sx={{ display: 'flex', gap: 0.5, alignItems: 'flex-start' }}>
-        <Typography variant="body2" fontWeight={650} sx={{ wordBreak: 'break-word', lineHeight: 1.5 }}>{task.title}</Typography>
+      <Box sx={{ display: 'flex', alignItems: 'center', gap: 0.5, mb: 0.6 }}>
+        <Typography variant="caption" color="text.disabled" sx={{ fontFamily: 'monospace', fontSize: 11 }}>#{task.id.slice(0, 6)}</Typography>
+        <Box sx={{ flexGrow: 1 }} />
+        {type && (
+          <Tooltip title={`任务类型：${type.name}`}>
+            <Chip size="small" icon={<CategoryIcon sx={{ fontSize: 12 }} />} label={type.name} variant="outlined"
+              sx={{ maxWidth: 124, '& .MuiChip-label': { overflow: 'hidden', textOverflow: 'ellipsis' } }} />
+          </Tooltip>
+        )}
+        {task.priority > 0 && <Chip size="small" icon={<FlagIcon sx={{ fontSize: 12 }} />} label={`P${task.priority}`} color="warning" variant="outlined" />}
       </Box>
-      {(task.priority > 0 || task.prState || task.retryCount > 0 || tags.length > 0 || workflowLabel) && (
+
+      <Typography variant="body2" fontWeight={650} sx={{ wordBreak: 'break-word', lineHeight: 1.5 }}>{task.title}</Typography>
+
+      {task.content && (
+        <Typography variant="caption" color="text.secondary" sx={{
+          mt: 0.5, display: '-webkit-box', WebkitLineClamp: 2, WebkitBoxOrient: 'vertical',
+          overflow: 'hidden', lineHeight: 1.55, wordBreak: 'break-word',
+        }}>{task.content}</Typography>
+      )}
+
+      {(running || workflowLabel || task.prState || task.retryCount > 0) && (
         <Box sx={{ display: 'flex', gap: 0.5, flexWrap: 'wrap', mt: 1, alignItems: 'center' }}>
+          {running && (
+            <Chip size="small" color="primary" variant="filled" label="运行中" icon={
+              <Box sx={{ width: 6, height: 6, borderRadius: '50%', bgcolor: 'primary.main', ml: 1, animation: 'pulse 1.4s infinite', '@keyframes pulse': { '50%': { opacity: 0.3 } } }} />
+            } />
+          )}
           {workflowLabel && <Chip size="small" icon={<AccountTreeIcon sx={{ fontSize: 12 }} />} label={workflowLabel} color="primary" variant="outlined" />}
-          {task.priority > 0 && <Chip size="small" icon={<FlagIcon sx={{ fontSize: 12 }} />} label={`P${task.priority}`} color="warning" variant="outlined" />}
           {task.prState && <Chip size="small" icon={<MergeIcon sx={{ fontSize: 12 }} />}
             label={task.prState === 'merged' ? '已合并' : task.prState === 'local' ? '本地交付' : 'PR 待合并'}
             color={task.prState === 'merged' ? 'success' : 'default'} variant="outlined" />}
           {task.retryCount > 0 && <Chip size="small" label={`重试 ${task.retryCount}`} variant="outlined" />}
+        </Box>
+      )}
+
+      {tags.length > 0 && (
+        <Box sx={{ display: 'flex', gap: 0.5, flexWrap: 'wrap', mt: 1 }}>
           {tags.map(t => <Chip key={t} size="small" label={t} variant="outlined" />)}
         </Box>
       )}
+
       {task.status === 'blocked' && task.blockReason && (
         <Box sx={{ mt: 1.25, px: 1.25, py: 0.75, borderRadius: 1.25, bgcolor: '#fdeef0' }}>
-          <Typography variant="caption" sx={{ color: 'error.main', display: 'block', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
-            {task.blockReason}
-          </Typography>
+          <Typography variant="caption" sx={{
+            color: 'error.main', display: '-webkit-box', WebkitLineClamp: 2, WebkitBoxOrient: 'vertical',
+            overflow: 'hidden', lineHeight: 1.45,
+          }}>{task.blockReason}</Typography>
         </Box>
       )}
-      {assignee && (
-        <Box sx={{ display: 'flex', alignItems: 'center', gap: 0.75, mt: 1.25 }}>
-          <PersonAvatar name={assignee} size={20} />
-          <Typography variant="caption" color="text.secondary">{assignee}</Typography>
-        </Box>
-      )}
+
+      <Divider sx={{ my: 1, borderColor: '#eef0f4' }} />
+      <Box sx={{ display: 'flex', alignItems: 'center', gap: 0.75, minWidth: 0 }}>
+        {projectName && (
+          <Tooltip title={`项目：${projectName}`}>
+            <Chip size="small" icon={<FolderOutlinedIcon sx={{ fontSize: 12 }} />} label={projectName} variant="outlined"
+              sx={{ maxWidth: 116, '& .MuiChip-label': { overflow: 'hidden', textOverflow: 'ellipsis' } }} />
+          </Tooltip>
+        )}
+        <Box sx={{ flexGrow: 1 }} />
+        {(task.commentCount || 0) > 0 && (
+          <Tooltip title={`${task.commentCount} 条评论`}>
+            <Box sx={{ display: 'flex', alignItems: 'center', gap: 0.3, color: 'text.secondary' }}>
+              <ChatBubbleOutlineIcon sx={{ fontSize: 13 }} />
+              <Typography variant="caption" sx={{ fontSize: 11 }}>{task.commentCount}</Typography>
+            </Box>
+          </Tooltip>
+        )}
+        {(task.runCount || 0) > 0 && (
+          <Tooltip title={`${task.runCount} 次运行`}>
+            <Box sx={{ display: 'flex', alignItems: 'center', gap: 0.3, color: 'text.secondary' }}>
+              <HistoryIcon sx={{ fontSize: 13 }} />
+              <Typography variant="caption" sx={{ fontSize: 11 }}>{task.runCount}</Typography>
+            </Box>
+          </Tooltip>
+        )}
+        {assignee && <Tooltip title={assignee}><PersonAvatar name={assignee} size={20} /></Tooltip>}
+      </Box>
+      <Typography variant="caption" color="text.disabled" sx={{ display: 'block', mt: 0.5, fontSize: 10.5 }}>
+        更新于 {task.updatedAt?.replace('T', ' ').slice(5, 16)}
+      </Typography>
     </>
   )
 }
 
-function TaskCard({ task, agents, workflows, onOpen }: { task: Task; agents: Agent[]; workflows: Workflow[]; onOpen: () => void }) {
+function TaskCard({ task, agents, workflows, projects, types, onOpen }: {
+  task: Task; agents: Agent[]; workflows: Workflow[]; projects: Project[]; types: TaskType[]; onOpen: () => void
+}) {
   const { attributes, listeners, setNodeRef, isDragging } = useDraggable({ id: task.id })
+  const running = task.status === 'in_progress'
   return (
     <Paper ref={setNodeRef} {...listeners} {...attributes} onClick={onOpen}
       sx={{
         p: 1.75, mb: 1.25, cursor: 'grab', opacity: isDragging ? 0.35 : 1,
         bgcolor: '#ffffff', borderRadius: 1.5, boxShadow: '0 1px 3px rgba(29,36,58,0.07)',
         transition: 'transform .16s, box-shadow .16s',
+        ...(running ? {
+          position: 'relative',
+          overflow: 'hidden',
+          border: '1px solid #e8e5ff',
+          boxShadow: '0 3px 16px rgba(99,91,255,0.14)',
+        } : {}),
         '&:hover': { transform: 'translateY(-2px)', boxShadow: '0 8px 20px rgba(29,36,58,0.1)' },
         '&:active': { cursor: 'grabbing' },
       }}>
-      <CardBody task={task} agents={agents} workflows={workflows} />
+      {running && (
+        <Box component="svg" aria-hidden sx={{ position: 'absolute', inset: 0, width: '100%', height: '100%', pointerEvents: 'none' }}>
+          <defs>
+            <linearGradient id={`beam-${task.id}`} x1="0%" y1="0%" x2="100%" y2="100%">
+              <stop offset="0%" stopColor="#635bff" />
+              <stop offset="55%" stopColor="#9b8cff" />
+              <stop offset="100%" stopColor="#d8d1ff" />
+            </linearGradient>
+          </defs>
+          <rect x={0.75} y={0.75} rx={10} fill="none" stroke="#eeebff" strokeWidth={1.5}
+            style={{ width: 'calc(100% - 1.5px)', height: 'calc(100% - 1.5px)' }} />
+          <rect x={0.75} y={0.75} rx={10} fill="none" stroke={`url(#beam-${task.id})`}
+            strokeWidth={2.2} strokeLinecap="round" strokeDasharray="84 1200"
+            style={{
+              width: 'calc(100% - 1.5px)', height: 'calc(100% - 1.5px)',
+              animation: 'fuxBeam 2.4s linear infinite',
+            }} />
+        </Box>
+      )}
+      <CardBody task={task} agents={agents} workflows={workflows} projects={projects} types={types} />
     </Paper>
   )
 }
 
-function LaneColumn({ lane, tasks, agents, workflows, onOpen, onCreate, dropState }: {
-  lane: Lane; tasks: Task[]; agents: Agent[]; workflows: Workflow[]
+function LaneColumn({ lane, tasks, agents, workflows, projects, types, onOpen, onCreate, dropState }: {
+  lane: Lane; tasks: Task[]; agents: Agent[]; workflows: Workflow[]; projects: Project[]; types: TaskType[]
   onOpen: (id: string) => void; onCreate: () => void; dropState: 'ok' | 'bad' | null
 }) {
   const { setNodeRef } = useDroppable({ id: lane.id })
@@ -131,7 +223,7 @@ function LaneColumn({ lane, tasks, agents, workflows, onOpen, onCreate, dropStat
         )}
       </Box>
       <Box sx={{ p: 1, overflowY: 'auto', flexGrow: 1 }}>
-        {tasks.map(t => <TaskCard key={t.id} task={t} agents={agents} workflows={workflows} onOpen={() => onOpen(t.id)} />)}
+        {tasks.map(t => <TaskCard key={t.id} task={t} agents={agents} workflows={workflows} projects={projects} types={types} onOpen={() => onOpen(t.id)} />)}
         {tasks.length === 0 && (
           <Box sx={{ textAlign: 'center', py: 4, px: 2, color: 'text.secondary' }}>
             <Box sx={{ opacity: 0.4, mb: 1 }}>{hint?.icon}</Box>
@@ -161,6 +253,8 @@ export default function BoardPage() {
   const [search, setSearch] = useState('')
   const [activeTask, setActiveTask] = useState<Task | null>(null)
   const [hoverLane, setHoverLane] = useState<{ id: string; ok: boolean } | null>(null)
+  const boardScrollRef = useRef<HTMLDivElement>(null)
+  const [scrollState, setScrollState] = useState({ left: false, right: false })
   const sensors = useSensors(useSensor(PointerSensor, { activationConstraint: { distance: 6 } }))
 
   const lanes = useMemo(() => (boardData?.lanes || []).slice().sort((a, b) => a.position - b.position), [boardData])
@@ -174,6 +268,30 @@ export default function BoardPage() {
   }), [tasks])
 
   const invalidate = () => { qc.invalidateQueries({ queryKey: ['tasks', boardId] }) }
+
+  const updateScrollState = () => {
+    const el = boardScrollRef.current
+    if (!el) return
+    setScrollState({
+      left: el.scrollLeft > 4,
+      right: el.scrollLeft + el.clientWidth < el.scrollWidth - 4,
+    })
+  }
+  useEffect(() => {
+    const el = boardScrollRef.current
+    if (!el) return
+    updateScrollState()
+    el.addEventListener('scroll', updateScrollState, { passive: true })
+    const ro = new ResizeObserver(updateScrollState)
+    ro.observe(el)
+    return () => { el.removeEventListener('scroll', updateScrollState); ro.disconnect() }
+  }, [lanes.length, filtered.length])
+
+  const scrollBoard = (dir: -1 | 1) => {
+    const el = boardScrollRef.current
+    if (!el) return
+    el.scrollBy({ left: dir * Math.round(el.clientWidth * 0.8), behavior: 'smooth' })
+  }
 
   const onDragStart = (e: DragStartEvent) => setActiveTask(tasks.find(t => t.id === String(e.active.id)) || null)
   const onDragOver = (e: DragOverEvent) => {
@@ -239,18 +357,30 @@ export default function BoardPage() {
         </Box>
       </Box>
       <DndContext sensors={sensors} onDragStart={onDragStart} onDragOver={onDragOver} onDragEnd={onDragEnd} onDragCancel={() => { setActiveTask(null); setHoverLane(null) }}>
-        <Box sx={{ display: 'flex', gap: 2, px: { xs: 2, md: 3.5 }, pb: 3.5, overflowX: 'auto', flexGrow: 1, minHeight: 0 }}>
-          {lanes.map(lane => (
-            <LaneColumn key={lane.id} lane={lane} agents={agents} workflows={workflows}
-              tasks={filtered.filter(t => t.laneId === lane.id || (!t.laneId && lane.kind === (t.status === 'in_progress' ? 'work' : t.status)))}
-              onOpen={id => nav(`/ws/${wsId}/tasks/${id}`)} onCreate={() => setCreateOpen(true)}
-              dropState={hoverLane?.id === lane.id ? (hoverLane.ok ? 'ok' : 'bad') : null} />
-          ))}
+        <Box sx={{ position: 'relative', display: 'flex', flexGrow: 1, minHeight: 0 }}>
+          <Box ref={boardScrollRef} sx={{ display: 'flex', gap: 2, px: { xs: 2, md: 3.5 }, pb: 3.5, overflowX: 'auto', flexGrow: 1, minHeight: 0 }}>
+            {lanes.map(lane => (
+              <LaneColumn key={lane.id} lane={lane} agents={agents} workflows={workflows} projects={projects} types={types}
+                tasks={filtered.filter(t => t.laneId === lane.id || (!t.laneId && lane.kind === (t.status === 'in_progress' ? 'work' : t.status)))}
+                onOpen={id => nav(`/ws/${wsId}/tasks/${id}`)} onCreate={() => setCreateOpen(true)}
+                dropState={hoverLane?.id === lane.id ? (hoverLane.ok ? 'ok' : 'bad') : null} />
+            ))}
+          </Box>
+          {scrollState.left && (
+            <IconButton aria-label="向左查看更多泳道" onClick={() => scrollBoard(-1)} sx={scrollButtonSx('left')}>
+              <ChevronLeftIcon fontSize="small" />
+            </IconButton>
+          )}
+          {scrollState.right && (
+            <IconButton aria-label="向右查看更多泳道" onClick={() => scrollBoard(1)} sx={scrollButtonSx('right')}>
+              <ChevronRightIcon fontSize="small" />
+            </IconButton>
+          )}
         </Box>
         <DragOverlay dropAnimation={null}>
           {activeTask && (
             <Paper sx={{ p: 1.75, width: 288, transform: 'rotate(1.5deg)', boxShadow: '0 18px 48px rgba(29,36,58,0.22)', borderRadius: 1.5, cursor: 'grabbing' }}>
-              <CardBody task={activeTask} agents={agents} workflows={workflows} />
+              <CardBody task={activeTask} agents={agents} workflows={workflows} projects={projects} types={types} />
             </Paper>
           )}
         </DragOverlay>
@@ -262,6 +392,22 @@ export default function BoardPage() {
     </Box>
   )
 }
+
+const scrollButtonSx = (side: 'left' | 'right') => ({
+  position: 'absolute' as const,
+  ...(side === 'left' ? { left: { xs: 6, md: 10 } } : { right: { xs: 6, md: 10 } }),
+  top: '46%',
+  transform: 'translateY(-50%)',
+  zIndex: 3,
+  width: 36,
+  height: 36,
+  bgcolor: 'rgba(255,255,255,0.96)',
+  border: '1px solid',
+  borderColor: 'divider',
+  boxShadow: '0 6px 18px rgba(29,36,58,0.16)',
+  color: 'text.secondary',
+  '&:hover': { bgcolor: '#fff', color: 'primary.main' },
+})
 
 function renderTemplate(tpl: string, vars: Record<string, string>): string {
   return tpl.replace(/\{\{(\w+)\}\}/g, (_, k) => vars[k] ?? `{{${k}}}`)

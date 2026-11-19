@@ -39,6 +39,10 @@ export const theme = createTheme({
           '&::-webkit-scrollbar-thumb:hover, & *::-webkit-scrollbar-thumb:hover': { backgroundColor: '#aeb6c7' },
           '&::-webkit-scrollbar-track, & *::-webkit-scrollbar-track': { backgroundColor: 'transparent' },
           '::selection': { backgroundColor: 'rgba(99,91,255,0.18)' },
+          '@keyframes fuxBeam': {
+            from: { strokeDashoffset: 0 },
+            to: { strokeDashoffset: -1290 },
+          },
         },
       },
     },

@@ -54,6 +54,7 @@ export interface Task {
   branch?: string; prUrl?: string; prState?: string; mergeCommit?: string
   retryCount: number; version: number; createdBy?: string; createdAt: string; updatedAt: string
   workflowName?: string; stageTotal?: number; stageDone?: number
+  commentCount?: number; runCount?: number; lastRunStatus?: string
 }
 export interface TaskType { id: string; workspaceId: string; name: string; icon: string; titleTemplate: string; contentTemplate: string; variablesSchema: string; defaults: string }
 export interface CliEntry { id: string; workspaceId?: string; name: string; kind: string; command: string; args: string; envTemplate: string; isDefault: number }
