@@ -27,7 +27,7 @@ import ExpandLessIcon from '@mui/icons-material/ExpandLess'
 import { get, post, taskEventsUrl, parseJson, STATUS_LABEL, STAGE_LABEL, STAGE_COLOR, type Task, type Run, type Project, type Envelope, type Workflow, type WorkflowStage, type Delivery, type Agent } from '../api'
 import type { WsCtx } from './WorkspaceLayout'
 import { EmptyState, PersonAvatar, StatusChip, useToast } from '../ui'
-import WorkflowCanvas, { autoLayout, NODE_H } from './WorkflowCanvas'
+import WorkflowCanvas, { autoLayout, NODE_H_STATUS } from './WorkflowCanvas'
 
 const fmtEventTime = (s?: string) => s ? `${s.slice(5, 10)} ${s.slice(11, 19)}` : ''
 
@@ -47,6 +47,7 @@ export default function TaskPage() {
   const [rejectOpen, setRejectOpen] = useState(false)
   const [rejectReason, setRejectReason] = useState('')
   const bottomRef = useRef<HTMLDivElement>(null)
+  const pageScrollRef = useRef<HTMLDivElement>(null)
   const allowAutoScroll = useRef(false)
   const isAdmin = role === 'owner' || role === 'admin'
 
@@ -82,11 +83,13 @@ export default function TaskPage() {
 
   useEffect(() => {
     if (!allowAutoScroll.current) return
-    const el = bottomRef.current?.parentElement
+    const el = pageScrollRef.current
     // 只有用户本来就在底部时才跟随最新动态，避免查看工作流状态时被拽走
     if (!el || el.scrollHeight - el.scrollTop - el.clientHeight > 160) return
-    bottomRef.current?.scrollIntoView({ behavior: 'smooth' })
+    bottomRef.current?.scrollIntoView({ behavior: 'smooth', block: 'end' })
   }, [events.length])
+
+  useEffect(() => { if (pageScrollRef.current) pageScrollRef.current.scrollTop = 0 }, [tab, taskId])
 
   const refresh = () => {
     qc.invalidateQueries({ queryKey: ['task', taskId] })
@@ -149,8 +152,8 @@ export default function TaskPage() {
   )
 
   return (
-    <Box sx={{ height: '100%', display: 'flex', flexDirection: 'column', overflow: { xs: 'auto', lg: 'hidden' } }}>
-      <Box sx={{ px: { xs: 2, md: 3.5 }, pt: 3, pb: 2.5, flexShrink: 0 }}>
+    <Box sx={{ height: '100%', display: 'flex', flexDirection: 'column', overflow: 'hidden' }}>
+      <Box sx={{ px: { xs: 2, md: 3.5 }, pt: 3, pb: 2.5, flexShrink: 0, bgcolor: 'background.default', borderBottom: '1px solid', borderColor: 'divider' }}>
         <Box sx={{ maxWidth: 1500, mx: 'auto' }}>
           <Box sx={{ display: 'flex', alignItems: 'center', gap: 1, mb: 2 }}>
             <Tooltip title="返回上一页"><IconButton size="small" onClick={() => nav(-1)} sx={{ ml: -0.75 }}><ArrowBackIcon /></IconButton></Tooltip>
@@ -186,19 +189,22 @@ export default function TaskPage() {
         </Box>
       </Box>
 
-      <Box sx={{ flexGrow: 1, minHeight: 0, px: { xs: 2, md: 3.5 }, pb: 3.5, overflow: { xs: 'visible', lg: 'hidden' } }}>
+      <Box ref={pageScrollRef} sx={{ flexGrow: 1, minHeight: 0, overflowY: 'auto', px: { xs: 2, md: 3.5 }, pb: 3.5 }}>
         <Box sx={{
-          maxWidth: 1500, mx: 'auto', height: { xs: 'auto', lg: '100%' }, display: 'grid', gap: 2.5,
-          gridTemplateColumns: { xs: 'minmax(0,1fr)', lg: 'minmax(0,1fr) 340px' }, alignItems: 'stretch',
+          maxWidth: 1500, mx: 'auto', mt: 2, display: 'grid', gap: 2.5,
+          gridTemplateColumns: { xs: 'minmax(0,1fr)', lg: 'minmax(0,1fr) 340px' }, alignItems: 'start',
         }}>
-          <Paper sx={{ minHeight: { xs: 560, lg: 0 }, display: 'flex', flexDirection: 'column', borderRadius: 1.25, overflow: 'hidden', boxShadow: '0 1px 4px rgba(29,36,58,0.05)' }}>
-            <Tabs value={tab} onChange={(_, v) => setTab(v)} sx={{ px: 2, borderBottom: '1px solid', borderColor: 'divider', bgcolor: '#fafbfc', flexShrink: 0 }}>
+          <Paper sx={{ minHeight: 560, display: 'flex', flexDirection: 'column', borderRadius: 1.25, boxShadow: '0 1px 4px rgba(29,36,58,0.05)' }}>
+            <Tabs value={tab} onChange={(_, v) => setTab(v)} sx={{
+              position: 'sticky', top: 0, zIndex: 3, px: 2, borderBottom: '1px solid', borderColor: 'divider',
+              bgcolor: '#fafbfc', flexShrink: 0, borderTopLeftRadius: 'inherit', borderTopRightRadius: 'inherit',
+            }}>
               <Tab label={`时间轴 ${items.length}`} /><Tab label="任务说明" />{task.workflowId && <Tab label="流程" />}
             </Tabs>
 
       {tab === 0 && (
         <>
-          <Box sx={{ flexGrow: 1, minHeight: 0, overflowY: 'auto', p: { xs: 2, md: 3 } }}>
+          <Box sx={{ p: { xs: 2, md: 3 } }}>
             {data?.workflow && (
               <WorkflowStatusPanel workflow={data.workflow} runs={data.runs || []} projects={projects} agents={agents}
                 taskStatus={task.status} onDetail={() => setTab(2)} />
@@ -406,7 +412,7 @@ export default function TaskPage() {
       )}
 
       {tab === 1 && (
-        <Box sx={{ flexGrow: 1, minHeight: 0, overflowY: 'auto', p: { xs: 2.5, md: 3.5 } }}>
+        <Box sx={{ p: { xs: 2.5, md: 3.5 } }}>
           <Typography variant="subtitle2" gutterBottom>任务内容</Typography>
           <Typography variant="body2" color={task.content ? 'text.primary' : 'text.secondary'} sx={{ whiteSpace: 'pre-wrap', wordBreak: 'break-word', lineHeight: 1.85, mt: 2 }}>{task.content || '这个任务还没有填写详细内容。'}</Typography>
           <Divider sx={{ my: 3 }} />
@@ -429,7 +435,11 @@ export default function TaskPage() {
       )}
           </Paper>
 
-          <Box component="aside" sx={{ minHeight: 0, overflowY: { xs: 'visible', lg: 'auto' }, display: 'flex', flexDirection: 'column', gap: 2, pb: 0.5 }}>
+          <Box component="aside" sx={{
+            display: 'flex', flexDirection: 'column', gap: 2, pb: 0.5,
+            position: { xs: 'static', lg: 'sticky' }, top: { lg: 16 }, alignSelf: 'start',
+            maxHeight: { lg: 'calc(100vh - 32px)' }, overflowY: { xs: 'visible', lg: 'auto' },
+          }}>
             <Paper elevation={0} sx={{ p: 2.25, bgcolor: 'background.paper', borderRadius: 1.25, flexShrink: 0, boxShadow: '0 1px 4px rgba(29,36,58,0.05)' }}>
               <Box sx={{ display: 'flex', alignItems: 'center', gap: 1, mb: 2 }}>
                 <RateReviewIcon sx={{ fontSize: 19, color: 'secondary.main' }} />
@@ -590,8 +600,8 @@ function WorkflowStatusPanel({ workflow, runs, projects, agents, taskStatus, onD
   const pct = stages.length ? Math.round((done / stages.length) * 100) : 0
   const summary = failed ? '存在失败节点' : running ? '正在执行' : allDone ? '全部完成' : taskStatus === 'in_progress' ? '等待节点就绪' : '未开始'
   const barColor: 'error' | 'success' | 'primary' = failed ? 'error' : allDone ? 'success' : 'primary'
-  const contentBottom = Math.max(0, ...stages.map(s => (s.y ?? 0) + NODE_H))
-  const canvasHeight = Math.min(380, Math.max(240, contentBottom + 72))
+  const contentBottom = Math.max(0, ...stages.map(s => (s.y ?? 0) + NODE_H_STATUS))
+  const canvasHeight = Math.min(440, Math.max(260, contentBottom + 80))
   return (
     <Paper elevation={0} sx={{ mb: 2.5, border: '1px solid', borderColor: 'divider', borderRadius: 1.25, overflow: 'hidden' }}>
       <Box sx={{ px: 2, py: 1.25, display: 'flex', alignItems: 'center', gap: 1, bgcolor: '#fafbfc' }}>
@@ -682,7 +692,7 @@ function WorkflowFlowPanel({ workflow, runs, projects, agents, taskStatus, isAdm
     levels.set(lv, [...(levels.get(lv) || []), s])
   }
   return (
-    <Box sx={{ flexGrow: 1, minHeight: 0, overflowY: 'auto', p: { xs: 2, md: 3 } }}>
+    <Box sx={{ p: { xs: 2, md: 3 } }}>
       <Box sx={{ display: 'flex', alignItems: 'center', gap: 1, mb: 1 }}>
         <AccountTreeIcon sx={{ fontSize: 18, color: 'primary.main' }} />
         <Typography variant="subtitle2" sx={{ flexGrow: 1 }}>{workflow.name}</Typography>

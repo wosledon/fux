@@ -7,6 +7,8 @@ import type { Agent, Project, WorkflowStage } from '../api'
 
 export const NODE_W = 216
 export const NODE_H = 104
+/** 只读状态卡还需要展示运行元信息，略高一些。 */
+export const NODE_H_STATUS = 116
 const GAP_X = 96
 const GAP_Y = 40
 
@@ -61,6 +63,7 @@ type Props = {
 }
 
 export default function WorkflowCanvas({ stages, agents, projects, selected, onChange, onSelect, readonly = false, statusOf, metaOf }: Props) {
+  const nodeH = readonly ? NODE_H_STATUS : NODE_H
   const canvasRef = useRef<HTMLDivElement>(null)
   const dragRef = useRef<{ key: string; dx: number; dy: number } | null>(null)
   const [connectMode, setConnectMode] = useState(false)
@@ -75,7 +78,7 @@ export default function WorkflowCanvas({ stages, agents, projects, selected, onC
   }, [stages])
 
   const maxX = Math.max(760, ...stages.map(s => (positions.get(s.key)?.x || 0) + NODE_W + 80))
-  const maxY = Math.max(readonly ? 240 : 460, ...stages.map(s => (positions.get(s.key)?.y || 0) + NODE_H + 80))
+  const maxY = Math.max(readonly ? 240 : 460, ...stages.map(s => (positions.get(s.key)?.y || 0) + nodeH + 80))
 
   const point = (e: React.PointerEvent): { x: number; y: number } => {
     const rect = canvasRef.current?.getBoundingClientRect()
@@ -174,8 +177,8 @@ export default function WorkflowCanvas({ stages, agents, projects, selected, onC
             {edges.map((e, i) => {
               const a = positions.get(e.from)!
               const b = positions.get(e.to)!
-              const x1 = a.x + NODE_W, y1 = a.y + NODE_H / 2
-              const x2 = b.x, y2 = b.y + NODE_H / 2
+              const x1 = a.x + NODE_W, y1 = a.y + nodeH / 2
+              const x2 = b.x, y2 = b.y + nodeH / 2
               const mid = Math.max(40, Math.abs(x2 - x1) / 2)
               const d = `M ${x1} ${y1} C ${x1 + mid} ${y1}, ${x2 - mid} ${y2}, ${x2} ${y2}`
               const st = statusOf?.(e.to)
@@ -222,7 +225,7 @@ export default function WorkflowCanvas({ stages, agents, projects, selected, onC
                 onPointerDown={e => onNodeDown(e, s)}
                 onClick={e => { e.stopPropagation(); onNodeClick(s) }}
                 sx={{
-                  position: 'absolute', left: p.x, top: p.y, width: NODE_W, height: NODE_H,
+                  position: 'absolute', left: p.x, top: p.y, width: NODE_W, height: nodeH,
                   p: 1.5, borderRadius: 1.5, cursor: readonly ? 'pointer' : connectMode ? 'crosshair' : 'grab', userSelect: 'none',
                   border: '2px solid',
                   borderColor: isSource ? 'warning.main' : isSelected ? 'primary.main' : (readonly && statusBorder ? statusBorder : 'divider'),
