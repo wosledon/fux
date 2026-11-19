@@ -1,9 +1,9 @@
 //! 任务状态机（PRD 3.5.2 转移表 T1-T11）+ 评论语义（3.5.3）。
 //! 所有转移集中在此，API 与调度器共用，杜绝非法转移。
+use crate::server::AppState;
 use crate::server::error::{ApiError, ApiResult};
 use crate::server::events;
 use crate::server::models::{Lane, Task};
-use crate::server::AppState;
 use serde_json::json;
 
 pub fn lane_kind(status: &str) -> Option<&'static str> {
@@ -68,10 +68,12 @@ pub struct MoveOpts {
 }
 
 pub async fn load_task(state: &AppState, task_id: &str) -> ApiResult<Task> {
-    Ok(sqlx::query_as::<_, Task>("SELECT * FROM tasks WHERE id = ?")
-        .bind(task_id)
-        .fetch_one(&state.db)
-        .await?)
+    Ok(
+        sqlx::query_as::<_, Task>("SELECT * FROM tasks WHERE id = ?")
+            .bind(task_id)
+            .fetch_one(&state.db)
+            .await?,
+    )
 }
 
 pub async fn move_task(
@@ -98,11 +100,38 @@ pub async fn move_task(
     if actor.starts_with("user:") && !user_can(&from, to) {
         return Err(ApiError::forbidden("该转移只能由智能体/系统执行"));
     }
-    // T5：审核通过必须检测到合并（或 admin 人工确认）
-    if to == "done" && task.pr_state.as_deref() != Some("merged") && !opts.manual_confirm {
-        return Err(ApiError::conflict(
-            "PR/MR 尚未检测到合并，无法批准；如已线下合并可由 admin 人工确认",
-        ));
+    // T5：审核通过必须检测到合并（或 admin 人工确认）；工作流要求全部交付已合并
+    if to == "done" && !opts.manual_confirm {
+        let merged = if task.workflow_id.is_some() {
+            let total: i64 =
+                sqlx::query_scalar("SELECT COUNT(*) FROM deliveries WHERE task_id = ?")
+                    .bind(task_id)
+                    .fetch_one(&state.db)
+                    .await?;
+            let done: i64 = sqlx::query_scalar(
+                "SELECT COUNT(*) FROM deliveries WHERE task_id = ? AND pr_state = 'merged'",
+            )
+            .bind(task_id)
+            .fetch_one(&state.db)
+            .await?;
+            (total > 0 && done == total) || task.pr_state.as_deref() == Some("merged")
+        } else {
+            task.pr_state.as_deref() == Some("merged")
+        };
+        if !merged {
+            return Err(ApiError::conflict(
+                "PR/MR 尚未检测到合并，无法批准；如已线下合并可由 admin 人工确认",
+            ));
+        }
+    }
+
+    // 工作流：驳回/完成返工只重跑汇点节点；解除阻塞时重置失败节点以便重新派发
+    if task.workflow_id.is_some() {
+        if (from == "review" || from == "done") && to == "ready" {
+            crate::server::workflow::reset_sinks_for_rework(state, task_id).await?;
+        } else if from == "blocked" {
+            crate::server::workflow::reset_failed_runs(state, task_id).await?;
+        }
     }
 
     let mut blocked_from = task.blocked_from.clone();
@@ -121,10 +150,11 @@ pub async fn move_task(
     }
 
     // 泳道解析：优先指定；in_progress 保留当前工作子泳道
-    let lanes = sqlx::query_as::<_, Lane>("SELECT * FROM lanes WHERE board_id = ? ORDER BY position")
-        .bind(&task.board_id)
-        .fetch_all(&state.db)
-        .await?;
+    let lanes =
+        sqlx::query_as::<_, Lane>("SELECT * FROM lanes WHERE board_id = ? ORDER BY position")
+            .bind(&task.board_id)
+            .fetch_all(&state.db)
+            .await?;
     let lane_id = opts.lane_id.clone().or_else(|| {
         if to == "in_progress" {
             if let Some(cur) = &task.lane_id {
@@ -194,20 +224,30 @@ pub async fn add_comment(
                 task_id,
                 "ready",
                 &format!("user:{user_id}"),
-                MoveOpts { reason: Some("已完成任务收到评论，触发返工".into()), ..Default::default() },
+                MoveOpts {
+                    reason: Some("已完成任务收到评论，触发返工".into()),
+                    ..Default::default()
+                },
             )
             .await
         }
         "blocked" => {
             // T9：评论视为解答，自动解除阻塞回来源状态
             let target = task.blocked_from.clone().unwrap_or_else(|| "ready".into());
-            let target = if legal("blocked", &target) { target } else { "ready".into() };
+            let target = if legal("blocked", &target) {
+                target
+            } else {
+                "ready".into()
+            };
             move_task(
                 state,
                 task_id,
                 &target,
                 &format!("user:{user_id}"),
-                MoveOpts { reason: Some("评论解答，自动解除阻塞".into()), ..Default::default() },
+                MoveOpts {
+                    reason: Some("评论解答，自动解除阻塞".into()),
+                    ..Default::default()
+                },
             )
             .await
         }
@@ -236,7 +276,10 @@ pub async fn pending_guidance(state: &AppState, task_id: &str) -> Vec<(i64, Stri
             added.push((r.seq, text.to_string()));
         }
     }
-    added.into_iter().filter(|(seq, _)| !injected.contains(seq)).collect()
+    added
+        .into_iter()
+        .filter(|(seq, _)| !injected.contains(seq))
+        .collect()
 }
 
 #[cfg(test)]

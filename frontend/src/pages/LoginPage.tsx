@@ -10,7 +10,7 @@ import { Logo } from '../ui'
 
 const FEATURES = [
   { icon: <ViewKanbanIcon />, t: '自驱动看板', d: '任务自动认领、流转、交付，全程可视' },
-  { icon: <SmartToyIcon />, t: '智能体团队', d: 'Codex / OpenCode / Pi / Copilot CLI 即插即用' },
+  { icon: <SmartToyIcon />, t: '标准工作流', d: 'Codex / OpenCode / Pi / Copilot CLI 即插即用' },
   { icon: <HubIcon />, t: '多节点执行', d: '另一台电脑装个 runtime 即可加入' },
   { icon: <ShieldIcon />, t: '质量阀护航', d: '循环 / 停滞 / 中断自动熔断，PR/MR 强制审核' },
 ]
@@ -44,7 +44,7 @@ export default function LoginPage() {
       }}>
         <Logo size={40} />
         <Typography variant="h4" sx={{ mt: 4, mb: 1.5, maxWidth: 460 }}>
-          让智能体团队<br />替你推进每一张卡片
+          让智能体工作流<br />替你推进每一张卡片
         </Typography>
         <Typography color="text.secondary" sx={{ mb: 5, maxWidth: 420 }}>
           Fux 是一个 AI 工作台：人定义目标、评审结果；智能体认领任务、执行工作、流式交付过程。

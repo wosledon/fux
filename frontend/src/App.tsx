@@ -10,7 +10,7 @@ import BoardPage from './pages/BoardPage'
 import ProjectsPage from './pages/ProjectsPage'
 import TaskTypesPage from './pages/TaskTypesPage'
 import AgentsPage from './pages/AgentsPage'
-import TeamsPage from './pages/TeamsPage'
+import WorkflowsPage from './pages/WorkflowsPage'
 import CliEntriesPage from './pages/CliEntriesPage'
 import SkillsPage from './pages/SkillsPage'
 import McpPage from './pages/McpPage'
@@ -65,7 +65,7 @@ export default function App() {
         <Route path="projects" element={<ProjectsPage />} />
         <Route path="types" element={<TaskTypesPage />} />
         <Route path="agents" element={<AgentsPage />} />
-        <Route path="teams" element={<TeamsPage />} />
+        <Route path="workflows" element={<WorkflowsPage />} />
         <Route path="clis" element={<CliEntriesPage />} />
         <Route path="skills" element={<SkillsPage />} />
         <Route path="mcp" element={<McpPage />} />

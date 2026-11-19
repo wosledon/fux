@@ -11,6 +11,7 @@ pub mod nodes_ws;
 pub mod scheduler;
 pub mod secrets;
 pub mod watchdog;
+pub mod workflow;
 
 use crate::proto::ServerMsg;
 use events::EventEnvelope;

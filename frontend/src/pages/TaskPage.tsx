@@ -20,9 +20,11 @@ import ListAltOutlinedIcon from '@mui/icons-material/ListAltOutlined'
 import AutorenewIcon from '@mui/icons-material/Autorenew'
 import RadioButtonUncheckedIcon from '@mui/icons-material/RadioButtonUnchecked'
 import LinkOutlinedIcon from '@mui/icons-material/LinkOutlined'
-import { get, post, taskEventsUrl, parseJson, STATUS_LABEL, type Task, type Run, type Project, type Envelope } from '../api'
+import AccountTreeIcon from '@mui/icons-material/AccountTree'
+import { get, post, taskEventsUrl, parseJson, STATUS_LABEL, STAGE_LABEL, STAGE_COLOR, type Task, type Run, type Project, type Envelope, type Workflow, type WorkflowStage, type Delivery, type Agent } from '../api'
 import type { WsCtx } from './WorkspaceLayout'
 import { EmptyState, PersonAvatar, StatusChip, useToast } from '../ui'
+import WorkflowCanvas from './WorkflowCanvas'
 
 const fmtTime = (s: string) => s?.replace('T', ' ').slice(11, 19)
 
@@ -42,9 +44,13 @@ export default function TaskPage() {
   const bottomRef = useRef<HTMLDivElement>(null)
   const isAdmin = role === 'owner' || role === 'admin'
 
-  const { data, isError } = useQuery({ queryKey: ['task', taskId], queryFn: () => get<{ task: Task; runs: Run[]; project?: Project }>(`/tasks/${taskId}`) })
+  const { data, isError } = useQuery({ queryKey: ['task', taskId], queryFn: () => get<{ task: Task; runs: Run[]; project?: Project; workflow?: Workflow; deliveries?: Delivery[] }>(`/tasks/${taskId}`) })
   const task = data?.task
-  const { data: pr } = useQuery({ queryKey: ['pr', taskId], queryFn: () => get<any>(`/tasks/${taskId}/pull-request`), enabled: !!task })
+  const deliveries = data?.deliveries || []
+  const deliveriesMerged = deliveries.length > 0 && deliveries.every(d => d.prState === 'merged')
+  const { data: projects = [] } = useQuery({ queryKey: ['projects', wsId], queryFn: () => get<Project[]>(`/workspaces/${wsId}/projects`) })
+  const { data: agents = [] } = useQuery({ queryKey: ['agents', wsId], queryFn: () => get<Agent[]>(`/workspaces/${wsId}/agents`) })
+  const { data: pr } = useQuery({ queryKey: ['pr', taskId], queryFn: () => get<any>(`/tasks/${taskId}/pull-request`), enabled: !!task && !task.workflowId })
 
   useEffect(() => {
     setEvents([])
@@ -53,7 +59,7 @@ export default function TaskPage() {
       try {
         const env: Envelope = JSON.parse(ev.data)
         setEvents(prev => prev.some(e => e.seq === env.seq) ? prev : [...prev, env])
-        if (String(env.kind).startsWith('task.') || env.kind.startsWith('pr.') || env.kind === 'comment.added') {
+        if (String(env.kind).startsWith('task.') || env.kind.startsWith('pr.') || env.kind.startsWith('workflow.') || env.kind === 'comment.added') {
           qc.invalidateQueries({ queryKey: ['task', taskId] })
           qc.invalidateQueries({ queryKey: ['pr', taskId] })
           qc.invalidateQueries({ queryKey: ['tasks'] })
@@ -153,7 +159,7 @@ export default function TaskPage() {
               {task.status === 'blocked' && <Button variant="contained" color="warning" onClick={() => action(() => post(`/tasks/${taskId}/unblock`), '已解除阻塞')}>解除阻塞</Button>}
               {task.status === 'in_progress' && <Button variant="outlined" color="warning" onClick={() => action(() => post(`/tasks/${taskId}/cancel-run`), '已发送取消信号')}>取消运行</Button>}
               {task.status === 'review' && <Button variant="contained" color="success" startIcon={<CheckCircleIcon />}
-                disabled={busy || (task.prState !== 'merged' && !manualConfirm)}
+                disabled={busy || ((task.workflowId ? !(deliveries.length > 0 && deliveries.every(d => d.prState === 'merged')) : task.prState !== 'merged') && !manualConfirm)}
                 onClick={() => action(() => post(`/tasks/${taskId}/transition`, { to: 'done', manualConfirm }), '已批准，任务完成')}>批准交付</Button>}
               {task.status === 'review' && <Button variant="outlined" color="error" startIcon={<CancelIcon />} onClick={() => setRejectOpen(true)}>驳回</Button>}
               {task.status === 'done' && <Button variant="outlined" onClick={() => action(() => post(`/tasks/${taskId}/archive`), '已归档')}>归档任务</Button>}
@@ -170,7 +176,7 @@ export default function TaskPage() {
         }}>
           <Paper sx={{ minHeight: { xs: 560, lg: 0 }, display: 'flex', flexDirection: 'column', borderRadius: 2.5, overflow: 'hidden', boxShadow: '0 1px 4px rgba(29,36,58,0.05)' }}>
             <Tabs value={tab} onChange={(_, v) => setTab(v)} sx={{ px: 2, borderBottom: '1px solid', borderColor: 'divider', bgcolor: '#fafbfc', flexShrink: 0 }}>
-              <Tab label={`活动 ${items.length}`} /><Tab label="任务说明" />
+              <Tab label={`活动 ${items.length}`} /><Tab label="任务说明" />{task.workflowId && <Tab label="流程" />}
             </Tabs>
 
       {tab === 0 && (
@@ -286,8 +292,22 @@ export default function TaskPage() {
                   return <Alert key={i} severity="success">检测到 PR/MR 已合并，可以批准任务</Alert>
                 case 'comment.injected':
                   return <Typography key={i} variant="caption" sx={{ textAlign: 'center', color: 'success.main' }}>引导评论已送达智能体</Typography>
-                case 'team.handoff':
-                  return <RunDivider key={i} label={`团队交接：阶段 ${env?.payload?.fromStage} → ${env?.payload?.toStage}`} />
+                case 'workflow.started':
+                  return <RunDivider key={i} icon={<AccountTreeIcon sx={{ fontSize: 14 }} />} label={`工作流开始：${env?.payload?.workflowName || ''}`} />
+                case 'workflow.stage_completed':
+                  return <RunDivider key={i} icon={<AccountTreeIcon sx={{ fontSize: 14 }} />} label={`节点完成：${env?.payload?.stageName || env?.payload?.stageKey || ''}`} />
+                case 'workflow.stage_skipped':
+                  return <Typography key={i} variant="caption" color="text.secondary" sx={{ textAlign: 'center' }}>节点已跳过：{env?.payload?.stageName || env?.payload?.stageKey}</Typography>
+                case 'workflow.stage_failed':
+                  return <Alert key={i} severity="error">节点失败：{env?.payload?.stageName || env?.payload?.stageKey} · {env?.payload?.error || env?.payload?.reason || ''}</Alert>
+                case 'workflow.completed':
+                  return <Alert key={i} severity="success">工作流全部节点已完成，等待审核</Alert>
+                case 'workflow.rewound':
+                  return <Typography key={i} variant="caption" color="text.secondary" sx={{ textAlign: 'center' }}>从节点「{env?.payload?.fromStage}」返工</Typography>
+                case 'workflow.rework_reset':
+                  return <Typography key={i} variant="caption" color="text.secondary" sx={{ textAlign: 'center' }}>返工：已重置汇点节点，等待重跑</Typography>
+                case 'workflow.retry_reset':
+                  return <Typography key={i} variant="caption" color="text.secondary" sx={{ textAlign: 'center' }}>解除阻塞：失败节点已重置，等待重新执行</Typography>
                 default:
                   return <Typography key={i} variant="caption" color="text.secondary">{it.kind} · {fmtTime(env?.createdAt || '')}</Typography>
               }
@@ -314,6 +334,19 @@ export default function TaskPage() {
           <Typography variant="body2" sx={{ fontFamily: 'monospace', wordBreak: 'break-all' }}>{task.id}</Typography>
         </Box>
       )}
+
+      {tab === 2 && data?.workflow && (
+        <WorkflowFlowPanel
+          workflow={data.workflow}
+          runs={data.runs || []}
+          projects={projects}
+          agents={agents}
+          taskStatus={task.status}
+          isAdmin={isAdmin}
+          onRewind={(key) => action(() => post(`/tasks/${taskId}/rewind`, { fromStage: key }), `已重置节点「${key}」及其下游`)}
+          onSkip={(key) => action(() => post(`/tasks/${taskId}/stages/${key}/skip`), `已跳过节点「${key}」`)}
+        />
+      )}
           </Paper>
 
           <Box component="aside" sx={{ minHeight: 0, overflowY: { xs: 'visible', lg: 'auto' }, display: 'flex', flexDirection: 'column', gap: 2, pb: 0.5 }}>
@@ -323,6 +356,22 @@ export default function TaskPage() {
                 <Typography variant="subtitle2" sx={{ flexGrow: 1 }}>交付审核</Typography>
                 <Chip size="small" label={task.prState || '未交付'} color={task.prState === 'merged' ? 'success' : 'default'} variant={task.prState === 'merged' ? 'filled' : 'outlined'} />
               </Box>
+              {deliveries.length > 0 ? (
+                <Box sx={{ display: 'grid', gap: 1.5 }}>
+                  {deliveries.map(d => (
+                    <DeliveryRow key={d.id} d={d} projectName={projects.find(p => p.id === d.projectId)?.name || d.projectId} onSaved={refresh} />
+                  ))}
+                  <Button size="small" variant="outlined" startIcon={<RefreshIcon />}
+                    onClick={() => action(() => post(`/tasks/${taskId}/check-merge`), '合并检测完成')}>检测全部交付</Button>
+                  {task.status === 'review' && !deliveriesMerged && isAdmin && (
+                    <FormControlLabel control={<Checkbox size="small" checked={manualConfirm} onChange={e => setManualConfirm(e.target.checked)} />}
+                      label={<Typography variant="caption">人工确认全部已合并（保留审计记录）</Typography>} sx={{ alignItems: 'flex-start', '& .MuiCheckbox-root': { mt: -0.5 } }} />
+                  )}
+                  {task.status === 'review' && !deliveriesMerged && !isAdmin && (
+                    <Typography variant="caption" color="text.secondary">尚未全部合并；需管理员人工确认或等待自动检测。</Typography>
+                  )}
+                </Box>
+              ) : (
               <Box sx={{ display: 'grid', gap: 1.25 }}>
                 <MetaRow k="分支" v={<code>{task.branch || '—'}</code>} />
                 {pr?.prUrl && <MetaRow k="链接" v={<Link href={pr.prUrl} target="_blank" rel="noreferrer">打开 PR/MR <OpenInNewIcon sx={{ fontSize: 12 }} /></Link>} />}
@@ -339,6 +388,7 @@ export default function TaskPage() {
                   <Typography variant="caption" color="text.secondary">尚未检测到合并；需管理员人工确认或等待自动检测。</Typography>
                 )}
               </Box>
+              )}
             </Paper>
 
             <Paper elevation={0} sx={{ p: 2.25, bgcolor: 'background.paper', borderRadius: 2.5, flexShrink: 0, boxShadow: '0 1px 4px rgba(29,36,58,0.05)' }}>
@@ -361,7 +411,7 @@ export default function TaskPage() {
                     <Typography variant="caption" color="text.secondary">{r.startedAt?.replace('T', ' ').slice(5, 16)}</Typography>
                   </Box>
                   <Typography variant="caption" color="text.secondary" display="block" sx={{ mt: 0.75 }}>
-                    {r.nodeId === 'local' ? '本地节点' : '远程节点'} · {r.turnCount} 轮{r.retryCount > 0 ? ` · 重试 #${r.retryCount}` : ''}{r.stopReason ? ` · ${r.stopReason}` : ''}
+                    {r.nodeId === 'local' ? '本地节点' : '远程节点'} · {r.turnCount} 轮{r.stageKey ? ` · 节点 ${r.stageKey}` : ''}{r.retryCount > 0 ? ` · 重试 #${r.retryCount}` : ''}{r.stopReason ? ` · ${r.stopReason}` : ''}
                   </Typography>
                 </Box>
               ))}
@@ -401,6 +451,131 @@ function MetaRow({ k, v }: { k: string; v: React.ReactNode }) {
     <Box sx={{ display: 'flex', gap: 2, alignItems: 'center' }}>
       <Typography variant="caption" color="text.secondary" sx={{ width: 72, flexShrink: 0 }}>{k}</Typography>
       <Box sx={{ minWidth: 0, wordBreak: 'break-all' }}>{typeof v === 'string' ? <Typography variant="body2">{v}</Typography> : v}</Box>
+    </Box>
+  )
+}
+
+function DeliveryRow({ d, projectName, onSaved }: { d: Delivery; projectName: string; onSaved: () => void }) {
+  const toast = useToast()
+  const [url, setUrl] = useState(d.prUrl || '')
+  const [busy, setBusy] = useState(false)
+  const save = async () => {
+    if (!url.trim()) return
+    setBusy(true)
+    try {
+      await post(`/tasks/${d.taskId}/deliveries`, { deliveryId: d.id, prUrl: url.trim() })
+      toast('PR/MR 链接已保存', 'success'); onSaved()
+    } catch (e: any) { toast(e.message, 'error') } finally { setBusy(false) }
+  }
+  return (
+    <Box sx={{ p: 1.25, border: '1px solid', borderColor: 'divider', borderRadius: 2 }}>
+      <Box sx={{ display: 'flex', gap: 0.75, alignItems: 'center', mb: 0.75 }}>
+        <Typography variant="body2" fontWeight={650} sx={{ flexGrow: 1 }}>{projectName}</Typography>
+        <Chip size="small" variant="outlined" label={d.prState || '未交付'} color={d.prState === 'merged' ? 'success' : 'default'} />
+      </Box>
+      <Typography variant="caption" color="text.secondary" display="block">节点 {d.nodeKey} · <code>{d.branch || '—'}</code></Typography>
+      {d.prState !== 'merged' && (
+        <Box sx={{ display: 'flex', gap: 0.75, mt: 1 }}>
+          <TextField size="small" fullWidth placeholder="粘贴 PR/MR 链接" value={url} onChange={e => setUrl(e.target.value)} />
+          <Button size="small" variant="outlined" disabled={busy || !url.trim()} onClick={() => void save()}>保存</Button>
+        </Box>
+      )}
+      {d.prUrl && <Link href={d.prUrl} target="_blank" rel="noreferrer" variant="body2" sx={{ mt: 0.75, display: 'inline-block' }}>打开 PR/MR <OpenInNewIcon sx={{ fontSize: 12 }} /></Link>}
+      {d.prState === 'merged' && d.mergeCommit && <Typography variant="caption" color="text.secondary" display="block">合并提交 {d.mergeCommit.slice(0, 10)}</Typography>}
+    </Box>
+  )
+}
+
+function WorkflowFlowPanel({ workflow, runs, projects, agents, taskStatus, isAdmin, onRewind, onSkip }: {
+  workflow: Workflow; runs: Run[]; projects: Project[]; agents: Agent[]; taskStatus: string; isAdmin: boolean
+  onRewind: (key: string) => void; onSkip: (key: string) => void
+}) {
+  const stages = parseJson<WorkflowStage[]>(workflow.stages, [])
+  const latest = new Map<string, Run>()
+  for (const r of runs) if (r.stageKey) latest.set(r.stageKey, r)
+  const stateOf = (key: string) => {
+    const r = latest.get(key)
+    if (!r) return 'pending'
+    if (r.status === 'finished') return 'succeeded'
+    if (r.status === 'running') return 'running'
+    if (r.status === 'skipped') return 'skipped'
+    if (r.status === 'cancelled') return 'cancelled'
+    return 'failed'
+  }
+  const levelOf = (s: WorkflowStage, depth = 0): number => {
+    if (depth > 20 || s.dependsOn.length === 0) return 0
+    return 1 + Math.max(...s.dependsOn.map(k => { const d = stages.find(x => x.key === k); return d ? levelOf(d, depth + 1) : 0 }))
+  }
+  const levels = new Map<number, WorkflowStage[]>()
+  for (const s of stages) {
+    const lv = levelOf(s)
+    levels.set(lv, [...(levels.get(lv) || []), s])
+  }
+  const statusOf = (key: string) => {
+    const r = latest.get(key)
+    if (!r) return 'pending'
+    if (r.status === 'finished') return 'succeeded'
+    if (r.status === 'running') return 'running'
+    if (r.status === 'skipped') return 'skipped'
+    if (r.status === 'cancelled') return 'cancelled'
+    return 'failed'
+  }
+  const metaOf = (key: string) => {
+    const r = latest.get(key)
+    if (!r) return undefined
+    return `${r.turnCount} 轮${r.retryCount > 0 ? ` · 重试 #${r.retryCount}` : ''}${r.headSha ? ` · ${r.headSha.slice(0, 8)}` : ''}`
+  }
+  return (
+    <Box sx={{ flexGrow: 1, minHeight: 0, overflowY: 'auto', p: { xs: 2, md: 3 } }}>
+      <Box sx={{ display: 'flex', alignItems: 'center', gap: 1, mb: 1 }}>
+        <AccountTreeIcon sx={{ fontSize: 18, color: 'primary.main' }} />
+        <Typography variant="subtitle2" sx={{ flexGrow: 1 }}>{workflow.name}</Typography>
+      </Box>
+      <Typography variant="caption" color="text.secondary" display="block" sx={{ mb: 1.5 }}>
+        节点依赖满足即自动执行；绿色为已完成，紫色为执行中，红色为失败。
+      </Typography>
+      <Box sx={{ height: 320, mb: 2.5, border: '1px solid', borderColor: 'divider', borderRadius: 2, overflow: 'hidden' }}>
+        <WorkflowCanvas readonly stages={stages} agents={agents} projects={projects} selected={null}
+          onChange={() => {}} onSelect={() => {}} statusOf={statusOf} metaOf={metaOf} />
+      </Box>
+      <Box sx={{ display: 'grid', gap: 2 }}>
+        {[...levels.keys()].sort((a, b) => a - b).map(lv => (
+          <Box key={lv}>
+            <Typography variant="caption" color="text.secondary" sx={{ mb: 0.75, display: 'block' }}>第 {lv + 1} 层</Typography>
+            <Box sx={{ display: 'grid', gap: 1.25, gridTemplateColumns: { xs: '1fr', md: 'repeat(auto-fill, minmax(240px, 1fr))' } }}>
+              {levels.get(lv)!.map(s => {
+                const st = stateOf(s.key)
+                const r = latest.get(s.key)
+                return (
+                  <Paper key={s.key} elevation={0} sx={{ p: 1.5, border: '1px solid', borderColor: 'divider', borderRadius: 2 }}>
+                    <Box sx={{ display: 'flex', gap: 0.75, alignItems: 'center', mb: 0.75 }}>
+                      <Typography variant="body2" fontWeight={650} sx={{ flexGrow: 1 }}>{s.name || s.key}</Typography>
+                      <Chip size="small" color={STAGE_COLOR[st] as any} label={STAGE_LABEL[st] || st} variant={st === 'pending' ? 'outlined' : 'filled'} />
+                    </Box>
+                    <Typography variant="caption" color="text.secondary" display="block">
+                      项目：{projects.find(p => p.id === s.projectId)?.name || '继承主项目'} · 智能体：{agents.find(a => a.id === s.agentId)?.name || s.agentId.slice(0, 8)}
+                    </Typography>
+                    <Typography variant="caption" color="text.secondary" display="block">
+                      {s.dependsOn.length ? `依赖：${s.dependsOn.join(', ')}` : '入口节点'}{s.when ? ` · 条件：${s.when}` : ''}
+                    </Typography>
+                    {r && <Typography variant="caption" color="text.secondary" display="block">
+                      {r.turnCount} 轮{r.retryCount > 0 ? ` · 重试 #${r.retryCount}` : ''}{r.headSha ? ` · ${r.headSha.slice(0, 8)}` : ''}
+                    </Typography>}
+                    <Box sx={{ display: 'flex', gap: 1 }}>
+                      {isAdmin && (taskStatus === 'blocked' || taskStatus === 'review' || taskStatus === 'done') && (
+                        <Button size="small" sx={{ mt: 0.75 }} onClick={() => onRewind(s.key)}>从该节点返工</Button>
+                      )}
+                      {isAdmin && taskStatus === 'in_progress' && st !== 'succeeded' && st !== 'skipped' && (
+                        <Button size="small" sx={{ mt: 0.75 }} onClick={() => onSkip(s.key)}>跳过</Button>
+                      )}
+                    </Box>
+                  </Paper>
+                )
+              })}
+            </Box>
+          </Box>
+        ))}
+      </Box>
     </Box>
   )
 }

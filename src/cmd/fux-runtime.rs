@@ -1,14 +1,14 @@
 //! fux-runtime — 节点执行器：安装即注册（一次性配对码 + 出站 WS，免复杂配置）。
 use clap::Parser;
-use fux::git;
-use fux::proto::{probe_clis, Capabilities, RuntimeMsg, ServerMsg};
-use fux::runner::{RunOutcome, RunSink, RunSpec};
 use futures_util::{SinkExt, StreamExt};
-use serde_json::{json, Value};
+use fux::git;
+use fux::proto::{Capabilities, RuntimeMsg, ServerMsg, probe_clis};
+use fux::runner::{RunOutcome, RunSink, RunSpec};
+use serde_json::{Value, json};
 use std::collections::HashMap;
 use std::path::PathBuf;
 use std::sync::Arc;
-use tokio::sync::{mpsc, oneshot, Mutex};
+use tokio::sync::{Mutex, mpsc, oneshot};
 
 #[derive(Parser)]
 #[command(name = "fux-runtime", about = "Fux 节点执行器：安装即注册")]
@@ -39,21 +39,34 @@ type Cancels = Arc<Mutex<HashMap<String, mpsc::UnboundedSender<()>>>>;
 #[tokio::main]
 async fn main() -> anyhow::Result<()> {
     tracing_subscriber::fmt()
-        .with_env_filter(tracing_subscriber::EnvFilter::try_from_default_env().unwrap_or_else(|_| "info".into()))
+        .with_env_filter(
+            tracing_subscriber::EnvFilter::try_from_default_env().unwrap_or_else(|_| "info".into()),
+        )
         .init();
-    let Cmd::Join { server, code, name, data_dir } = Cli::parse().cmd;
+    let Cmd::Join {
+        server,
+        code,
+        name,
+        data_dir,
+    } = Cli::parse().cmd;
     let server = server.trim_end_matches('/').to_string();
     let data_dir = PathBuf::from(data_dir);
     tokio::fs::create_dir_all(&data_dir).await?;
 
-    let caps = Capabilities { os: std::env::consts::OS.to_string(), clis: probe_clis(), project_paths: vec![], load: 0 };
+    let caps = Capabilities {
+        os: std::env::consts::OS.to_string(),
+        clis: probe_clis(),
+        project_paths: vec![],
+        load: 0,
+    };
     println!("探测到 CLI: {:?}", caps.clis);
 
     // 1. 配对（REST，一次性码）
     let resp = reqwest::Client::new()
         .post(format!("{server}/api/v1/nodes/pair"))
         .json(&json!({ "code": code, "name": name, "capabilities": caps }))
-        .send().await?;
+        .send()
+        .await?;
     if !resp.status().is_success() {
         anyhow::bail!("配对失败: {}", resp.text().await?);
     }
@@ -65,7 +78,9 @@ async fn main() -> anyhow::Result<()> {
     // 2. 出站 WS 长连接
     let ws_url = format!(
         "{}/api/v1/node-channel?token={token}",
-        server.replace("http://", "ws://").replace("https://", "wss://")
+        server
+            .replace("http://", "ws://")
+            .replace("https://", "wss://")
     );
     let (ws, _) = tokio_tungstenite::connect_async(&ws_url).await?;
     let (mut ws_sink, mut ws_stream) = ws.split();
@@ -74,7 +89,13 @@ async fn main() -> anyhow::Result<()> {
     let writer = tokio::spawn(async move {
         while let Some(msg) = rx.recv().await {
             let text = serde_json::to_string(&msg).unwrap();
-            if ws_sink.send(tokio_tungstenite::tungstenite::Message::Text(text.into())).await.is_err() { break; }
+            if ws_sink
+                .send(tokio_tungstenite::tungstenite::Message::Text(text.into()))
+                .await
+                .is_err()
+            {
+                break;
+            }
         }
     });
 
@@ -88,7 +109,9 @@ async fn main() -> anyhow::Result<()> {
         let active = active.clone();
         tokio::spawn(async move {
             loop {
-                let _ = tx.send(RuntimeMsg::Heartbeat { load: active.load(std::sync::atomic::Ordering::Relaxed) });
+                let _ = tx.send(RuntimeMsg::Heartbeat {
+                    load: active.load(std::sync::atomic::Ordering::Relaxed),
+                });
                 tokio::time::sleep(std::time::Duration::from_secs(10)).await;
             }
         });
@@ -106,13 +129,20 @@ async fn main() -> anyhow::Result<()> {
             tokio_tungstenite::tungstenite::Message::Close(_) => break,
             _ => continue,
         };
-        let msg: ServerMsg = match serde_json::from_str(&text) { Ok(m) => m, Err(_) => continue };
+        let msg: ServerMsg = match serde_json::from_str(&text) {
+            Ok(m) => m,
+            Err(_) => continue,
+        };
         match msg {
             ServerMsg::Hello { approved, .. } => {
-                if approved { println!("节点已批准，可调度。"); }
+                if approved {
+                    println!("节点已批准，可调度。");
+                }
             }
             ServerMsg::Approval { approved } => {
-                if approved { println!("admin 已批准，节点上线。"); }
+                if approved {
+                    println!("admin 已批准，节点上线。");
+                }
             }
             ServerMsg::Dispatch { spec } => {
                 let tx = tx.clone();
@@ -128,13 +158,23 @@ async fn main() -> anyhow::Result<()> {
             }
             ServerMsg::Cancel { run_id } => {
                 let map = cancels.lock().await;
-                if let Some(c) = map.get(&run_id) { let _ = c.send(()); }
+                if let Some(c) = map.get(&run_id) {
+                    let _ = c.send(());
+                }
             }
-            ServerMsg::Permission { request_id, decision, .. } => {
+            ServerMsg::Permission {
+                request_id,
+                decision,
+                ..
+            } => {
                 let mut map = perms.lock().await;
-                if let Some(p) = map.remove(&request_id) { let _ = p.send(decision); }
+                if let Some(p) = map.remove(&request_id) {
+                    let _ = p.send(decision);
+                }
             }
-            ServerMsg::Ping => { let _ = tx.send(RuntimeMsg::Pong); }
+            ServerMsg::Ping => {
+                let _ = tx.send(RuntimeMsg::Pong);
+            }
         }
     }
     writer.abort();
@@ -143,17 +183,26 @@ async fn main() -> anyhow::Result<()> {
 }
 
 async fn prepare_workdir(data_dir: &PathBuf, spec: &RunSpec) -> anyhow::Result<PathBuf> {
-    let wt = git::worktree_dir(data_dir, &spec.task_id);
+    let wt = if spec.stage_key.is_empty() {
+        git::worktree_dir(data_dir, &spec.task_id)
+    } else {
+        git::stage_worktree_dir(data_dir, &spec.task_id, &spec.stage_key)
+    };
+    let base = spec
+        .base_branch
+        .clone()
+        .or_else(|| spec.project.as_ref().map(|p| p.default_branch.clone()))
+        .unwrap_or_else(|| "main".into());
     match &spec.project {
         Some(p) if p.kind == "git" => {
             let repo = git::checkout_dir(data_dir, &p.project_id);
             git::ensure_clone(p.remote_url.as_deref().unwrap_or(""), &repo).await?;
-            git::prepare_worktree(&repo, &wt, &spec.branch, &p.default_branch).await?;
+            git::prepare_worktree(&repo, &wt, &spec.branch, &base).await?;
         }
         Some(p) => {
             let lp = std::path::Path::new(p.local_path.as_deref().unwrap_or(""));
             if git::is_repo(lp).await {
-                git::prepare_worktree(lp, &wt, &spec.branch, &p.default_branch).await?;
+                git::prepare_worktree(lp, &wt, &spec.branch, &base).await?;
             } else if !wt.exists() {
                 git::copy_dir_recursive(lp, &wt)?;
                 git::init_repo(&wt).await?;
@@ -162,9 +211,12 @@ async fn prepare_workdir(data_dir: &PathBuf, spec: &RunSpec) -> anyhow::Result<P
         }
         None => {
             tokio::fs::create_dir_all(&wt).await?;
-            if !git::is_repo(&wt).await { git::init_repo(&wt).await?; }
+            if !git::is_repo(&wt).await {
+                git::init_repo(&wt).await?;
+            }
         }
     }
+    git::materialize_upstreams(&wt, &spec.upstream).await.ok();
     Ok(wt)
 }
 
@@ -177,22 +229,36 @@ struct RemoteSink {
 #[async_trait::async_trait]
 impl RunSink for RemoteSink {
     async fn emit(&self, kind: &str, payload: Value) {
-        let _ = self.tx.send(RuntimeMsg::Event { run_id: self.run_id.clone(), kind: kind.to_string(), payload });
+        let _ = self.tx.send(RuntimeMsg::Event {
+            run_id: self.run_id.clone(),
+            kind: kind.to_string(),
+            payload,
+        });
     }
     async fn permission(&self, request: Value) -> String {
         let request_id = fux::new_id();
         let (otx, orx) = oneshot::channel();
         self.perms.lock().await.insert(request_id.clone(), otx);
-        let _ = self.tx.send(RuntimeMsg::PermissionRequest { run_id: self.run_id.clone(), request_id: request_id.clone(), request });
+        let _ = self.tx.send(RuntimeMsg::PermissionRequest {
+            run_id: self.run_id.clone(),
+            request_id: request_id.clone(),
+            request,
+        });
         match tokio::time::timeout(std::time::Duration::from_secs(130), orx).await {
             Ok(Ok(d)) => d,
-            _ => { self.perms.lock().await.remove(&request_id); "reject".into() }
+            _ => {
+                self.perms.lock().await.remove(&request_id);
+                "reject".into()
+            }
         }
     }
     async fn heartbeat(&self, turn_count: u32) {
         let _ = self.tx.send(RuntimeMsg::RunState {
-            run_id: self.run_id.clone(), status: "running".into(), stop_reason: String::new(),
-            turn_count, session_id: String::new(),
+            run_id: self.run_id.clone(),
+            status: "running".into(),
+            stop_reason: String::new(),
+            turn_count,
+            session_id: String::new(),
         });
     }
     async fn pending_guidance(&self) -> Vec<String> {
@@ -201,14 +267,25 @@ impl RunSink for RemoteSink {
     }
 }
 
-async fn execute_run(spec: RunSpec, tx: mpsc::UnboundedSender<RuntimeMsg>, perms: Perms, cancels: Cancels, data_dir: PathBuf) {
+async fn execute_run(
+    spec: RunSpec,
+    tx: mpsc::UnboundedSender<RuntimeMsg>,
+    perms: Perms,
+    cancels: Cancels,
+    data_dir: PathBuf,
+) {
     let run_id = spec.run_id.clone();
     let workdir = match prepare_workdir(&data_dir, &spec).await {
         Ok(w) => w,
         Err(e) => {
             let _ = tx.send(RuntimeMsg::Finish {
-                run_id, status: "failed".into(), stop_reason: "interrupted".into(), turn_count: 0,
-                pushed: false, head: None, error: Some(format!("准备工作区失败: {e:#}")),
+                run_id,
+                status: "failed".into(),
+                stop_reason: "interrupted".into(),
+                turn_count: 0,
+                pushed: false,
+                head: None,
+                error: Some(format!("准备工作区失败: {e:#}")),
             });
             return;
         }
@@ -217,7 +294,11 @@ async fn execute_run(spec: RunSpec, tx: mpsc::UnboundedSender<RuntimeMsg>, perms
     spec.workdir = workdir.clone();
     let (cancel_tx, cancel_rx) = mpsc::unbounded_channel();
     cancels.lock().await.insert(run_id.clone(), cancel_tx);
-    let sink = Arc::new(RemoteSink { tx: tx.clone(), run_id: run_id.clone(), perms });
+    let sink = Arc::new(RemoteSink {
+        tx: tx.clone(),
+        run_id: run_id.clone(),
+        perms,
+    });
     let outcome: RunOutcome = fux::runner::execute(spec.clone(), sink, cancel_rx).await;
     cancels.lock().await.remove(&run_id);
 
@@ -229,7 +310,12 @@ async fn execute_run(spec: RunSpec, tx: mpsc::UnboundedSender<RuntimeMsg>, perms
         match git::commit_all(&workdir, &format!("fux(task): {}", spec.title)).await {
             Ok(h) => {
                 head = h;
-                let has_remote = spec.project.as_ref().and_then(|p| p.remote_url.as_deref()).map(|r| !r.is_empty()).unwrap_or(false)
+                let has_remote = spec
+                    .project
+                    .as_ref()
+                    .and_then(|p| p.remote_url.as_deref())
+                    .map(|r| !r.is_empty())
+                    .unwrap_or(false)
                     || git::has_remote(&workdir).await;
                 if has_remote {
                     match git::push(&workdir, &spec.branch).await {
@@ -242,10 +328,28 @@ async fn execute_run(spec: RunSpec, tx: mpsc::UnboundedSender<RuntimeMsg>, perms
             }
             Err(e) => error = Some(format!("git commit 失败: {e:#}")),
         }
+        // 无新提交时仍上报分支 HEAD，供下游节点引用产物
+        if head.is_none() && error.is_none() {
+            head = git::git(&workdir, &["rev-parse", "HEAD"]).await.ok();
+        }
     }
-    let status = if outcome.status == "finished" && error.is_some() { "failed".to_string() } else { outcome.status.clone() };
-    let stop_reason = if status == "failed" && outcome.status == "finished" { "interrupted".to_string() } else { outcome.stop_reason.clone() };
+    let status = if outcome.status == "finished" && error.is_some() {
+        "failed".to_string()
+    } else {
+        outcome.status.clone()
+    };
+    let stop_reason = if status == "failed" && outcome.status == "finished" {
+        "interrupted".to_string()
+    } else {
+        outcome.stop_reason.clone()
+    };
     let _ = tx.send(RuntimeMsg::Finish {
-        run_id, status, stop_reason, turn_count: outcome.turn_count, pushed, head, error,
+        run_id,
+        status,
+        stop_reason,
+        turn_count: outcome.turn_count,
+        pushed,
+        head,
+        error,
     });
 }

@@ -2,18 +2,20 @@
 
 本文只写「怎么跑、怎么加」；功能需求见 [PRD.md](PRD.md)，命令速查见 [AGENTS.md](../AGENTS.md)。
 
-## 现有测试（共 9 个）
+## 现有测试（共 12 个：6 单元 + 6 集成）
 
-| 位置                    | 名称                                    | 覆盖                                                                                |
-| ----------------------- | --------------------------------------- | ----------------------------------------------------------------------------------- |
-| `tests/api.rs`          | `auth_workspace_and_rbac`               | 建卡 / 非法转移 409 / 用户认领 403 / 邀请码一次性 / member 越权 403 / 事件 seq 递增 |
-| `tests/api.rs`          | `review_rework_archive_loop`            | 未合并批准 409 → `manualConfirm` → 评论返工 → 置 merged 后批准 → 归档               |
-| `tests/api.rs`          | `e2e_mock_agent_delivery`               | 真实拉起 mock agent：认领 → 时间线事件 → git 提交 → 审核中                          |
-| `tests/api.rs`          | `e2e_interrupt_retry_then_block`        | 中断自动重试 2 次后阻塞                                                             |
-| `tests/api.rs`          | `watchdog_loop_trip`                    | 5 条相同工具调用触发质量阀熔断                                                      |
-| `src/server/domain.rs`  | `transition_table` / `user_permissions` | T1–T11 合法性与用户子集                                                             |
-| `src/git.rs`            | 单元测试                                | PR/MR 链接推导等纯函数                                                              |
-| `src/server/secrets.rs` | `roundtrip`                             | AES-256-GCM 加解密                                                                  |
+| 位置                     | 名称                                    | 覆盖                                                                                |
+| ------------------------ | --------------------------------------- | ----------------------------------------------------------------------------------- |
+| `tests/api.rs`           | `auth_workspace_and_rbac`               | 建卡 / 非法转移 409 / 用户认领 403 / 邀请码一次性 / member 越权 403 / 事件 seq 递增 |
+| `tests/api.rs`           | `review_rework_archive_loop`            | 未合并批准 409 → `manualConfirm` → 评论返工 → 置 merged 后批准 → 归档               |
+| `tests/api.rs`           | `e2e_mock_agent_delivery`               | 真实拉起 mock agent：认领 → 时间线事件 → git 提交 → 审核中                          |
+| `tests/api.rs`           | `e2e_interrupt_retry_then_block`        | 中断自动重试 2 次后阻塞                                                             |
+| `tests/api.rs`           | `watchdog_loop_trip`                    | 5 条相同工具调用触发质量阀熔断                                                      |
+| `tests/api.rs`          | `workflow_dag_run_and_rewind`           | 工作流 DAG 校验、两节点自动推进、节点产物、交付生成、驳回重跑、从节点返工     |
+| `src/server/domain.rs`   | `transition_table` / `user_permissions` | T1–T11 合法性与用户子集                                                             |
+| `src/server/workflow.rs` | `validate_dag` / `readiness_and_sinks`  | DAG 校验、就绪判定、汇点与下游集                                                    |
+| `src/git.rs`             | 单元测试                                | PR/MR 链接推导等纯函数                                                              |
+| `src/server/secrets.rs`  | `roundtrip`                             | AES-256-GCM 加解密                                                                  |
 
 ```powershell
 cargo test                                                     # 全部

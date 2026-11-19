@@ -18,13 +18,13 @@ applyTo: ["frontend/src/**"]
 - 只用 `src/api.ts` 的 `get / post / patch / put / del`，不要手写 `fetch`（AI 助理的流式接口是唯一例外）。
 - token 只经 `getToken() / setToken()` 访问；401 已由 `req()` 统一清 token 并硬跳 `/login`，不要重复实现。
 - `api.ts` 里的接口类型是**手写**的（无 codegen）：后端字段变化时同步改这里的 `interface`，并留意 camelCase。
-- Query key 约定：`['entity', wsId]`（projects/agents/teams/skills/mcps/types/members/board/…）、`['tasks', boardId]`、`['task', taskId]`、`['pr', taskId]`、`['nodes']`、`['workspaces']`。
+- Query key 约定：`['entity', wsId]`（projects/agents/workflows/skills/mcps/types/members/board/…）、`['tasks', boardId]`、`['task', taskId]`、`['pr', taskId]`、`['nodes']`、`['workspaces']`。
 - **不使用** `useMutation`、乐观更新或 `setQueryData`。写操作统一：`await post(...)` → `qc.invalidateQueries({ queryKey: [...] })` → 成功 toast / 失败 `setErr` 或 `toast(e.message, 'error')`。
 
 ## 数据形状陷阱
 
 - 后端大量列是 JSON **字符串**：`Task.tags`、`Workspace.settings`、`Agent.policy/gates`、`CliEntry.args/envTemplate`、`TaskType.variablesSchema/defaults`、`EventEnvelope.payload`。一律 `parseJson(v, fallback)`，不要直接 `JSON.parse` 或 `.map`。
-- 响应常被包裹：`GET /board` → `{ board, lanes }`、`GET /tasks/{id}` → `{ task, runs, project? }`、`GET /teams` → `{ team, members }[]`。
+- 响应常被包裹：`GET /board` → `{ board, lanes }`、`GET /tasks/{id}` → `{ task, runs, project?, workflow?, deliveries? }`、`GET /workspaces/{id}/workflows` → `Workflow[]`。
 - `verbatimModuleSyntax: true`：类型必须 `import type { Task } from '../api'`，混入值导入会编译失败。
 
 ## 实时与看板

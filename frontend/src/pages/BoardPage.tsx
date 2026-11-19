@@ -9,14 +9,14 @@ import FlagIcon from '@mui/icons-material/Flag'
 import MergeIcon from '@mui/icons-material/Merge'
 import ErrorOutlineIcon from '@mui/icons-material/ErrorOutline'
 import SmartToyIcon from '@mui/icons-material/SmartToy'
-import GroupsIcon from '@mui/icons-material/Groups'
+import AccountTreeIcon from '@mui/icons-material/AccountTree'
 import CategoryIcon from '@mui/icons-material/Category'
 import InboxIcon from '@mui/icons-material/Inbox'
 import RocketLaunchIcon from '@mui/icons-material/RocketLaunch'
 import RateReviewIcon from '@mui/icons-material/RateReview'
 import CheckCircleOutlineIcon from '@mui/icons-material/CheckCircleOutline'
 import ArchiveIcon from '@mui/icons-material/Archive'
-import { get, post, patch, parseJson, type Task, type Lane, type Board, type Project, type Agent, type Team, type TaskType } from '../api'
+import { get, post, patch, parseJson, type Task, type Lane, type Board, type Project, type Agent, type Workflow, type TaskType } from '../api'
 import type { WsCtx } from './WorkspaceLayout'
 import { LANE_ACCENT } from '../theme'
 import { PersonAvatar, useToast } from '../ui'
@@ -47,17 +47,21 @@ function dropPlan(task: Task, lane: Lane): DropPlan {
   return { ok: false, reason: reasons[lane.kind] || '该状态转移不被允许' }
 }
 
-function CardBody({ task, agents, teams }: { task: Task; agents: Agent[]; teams: { team: Team }[] }) {
-  const assignee = task.assigneeAgentId ? agents.find(a => a.id === task.assigneeAgentId)?.name
-    : task.assigneeTeamId ? teams.find(t => t.team.id === task.assigneeTeamId)?.team.name : undefined
+function CardBody({ task, agents, workflows }: { task: Task; agents: Agent[]; workflows: Workflow[] }) {
+  const assignee = task.assigneeAgentId ? agents.find(a => a.id === task.assigneeAgentId)?.name : undefined
+  const workflowName = task.workflowId ? workflows.find(w => w.id === task.workflowId)?.name : undefined
+  const workflowLabel = task.workflowId
+    ? `${workflowName || '工作流'}${task.stageTotal ? ` · ${task.stageDone || 0}/${task.stageTotal}` : ''}`
+    : undefined
   const tags = parseJson<string[]>(task.tags, [])
   return (
     <>
       <Box sx={{ display: 'flex', gap: 0.5, alignItems: 'flex-start' }}>
         <Typography variant="body2" fontWeight={650} sx={{ wordBreak: 'break-word', lineHeight: 1.5 }}>{task.title}</Typography>
       </Box>
-      {(task.priority > 0 || task.prState || task.retryCount > 0 || tags.length > 0) && (
+      {(task.priority > 0 || task.prState || task.retryCount > 0 || tags.length > 0 || workflowLabel) && (
         <Box sx={{ display: 'flex', gap: 0.5, flexWrap: 'wrap', mt: 1, alignItems: 'center' }}>
+          {workflowLabel && <Chip size="small" icon={<AccountTreeIcon sx={{ fontSize: 12 }} />} label={workflowLabel} color="primary" variant="outlined" />}
           {task.priority > 0 && <Chip size="small" icon={<FlagIcon sx={{ fontSize: 12 }} />} label={`P${task.priority}`} color="warning" variant="outlined" />}
           {task.prState && <Chip size="small" icon={<MergeIcon sx={{ fontSize: 12 }} />}
             label={task.prState === 'merged' ? '已合并' : task.prState === 'local' ? '本地交付' : 'PR 待合并'}
@@ -83,7 +87,7 @@ function CardBody({ task, agents, teams }: { task: Task; agents: Agent[]; teams:
   )
 }
 
-function TaskCard({ task, agents, teams, onOpen }: { task: Task; agents: Agent[]; teams: { team: Team }[]; onOpen: () => void }) {
+function TaskCard({ task, agents, workflows, onOpen }: { task: Task; agents: Agent[]; workflows: Workflow[]; onOpen: () => void }) {
   const { attributes, listeners, setNodeRef, isDragging } = useDraggable({ id: task.id })
   return (
     <Paper ref={setNodeRef} {...listeners} {...attributes} onClick={onOpen}
@@ -94,13 +98,13 @@ function TaskCard({ task, agents, teams, onOpen }: { task: Task; agents: Agent[]
         '&:hover': { transform: 'translateY(-2px)', boxShadow: '0 8px 20px rgba(29,36,58,0.1)' },
         '&:active': { cursor: 'grabbing' },
       }}>
-      <CardBody task={task} agents={agents} teams={teams} />
+      <CardBody task={task} agents={agents} workflows={workflows} />
     </Paper>
   )
 }
 
-function LaneColumn({ lane, tasks, agents, teams, onOpen, onCreate, dropState }: {
-  lane: Lane; tasks: Task[]; agents: Agent[]; teams: { team: Team }[]
+function LaneColumn({ lane, tasks, agents, workflows, onOpen, onCreate, dropState }: {
+  lane: Lane; tasks: Task[]; agents: Agent[]; workflows: Workflow[]
   onOpen: (id: string) => void; onCreate: () => void; dropState: 'ok' | 'bad' | null
 }) {
   const { setNodeRef } = useDroppable({ id: lane.id })
@@ -127,7 +131,7 @@ function LaneColumn({ lane, tasks, agents, teams, onOpen, onCreate, dropState }:
         )}
       </Box>
       <Box sx={{ p: 1, overflowY: 'auto', flexGrow: 1 }}>
-        {tasks.map(t => <TaskCard key={t.id} task={t} agents={agents} teams={teams} onOpen={() => onOpen(t.id)} />)}
+        {tasks.map(t => <TaskCard key={t.id} task={t} agents={agents} workflows={workflows} onOpen={() => onOpen(t.id)} />)}
         {tasks.length === 0 && (
           <Box sx={{ textAlign: 'center', py: 4, px: 2, color: 'text.secondary' }}>
             <Box sx={{ opacity: 0.4, mb: 1 }}>{hint?.icon}</Box>
@@ -149,7 +153,7 @@ export default function BoardPage() {
   const { data: tasks = [] } = useQuery({ queryKey: ['tasks', boardId], queryFn: () => get<Task[]>(`/tasks?boardId=${boardId}`), enabled: !!boardId })
   const { data: projects = [] } = useQuery({ queryKey: ['projects', wsId], queryFn: () => get<Project[]>(`/workspaces/${wsId}/projects`) })
   const { data: agents = [] } = useQuery({ queryKey: ['agents', wsId], queryFn: () => get<Agent[]>(`/workspaces/${wsId}/agents`) })
-  const { data: teams = [] } = useQuery({ queryKey: ['teams', wsId], queryFn: () => get<{ team: Team; members: any[] }[]>(`/workspaces/${wsId}/teams`) })
+  const { data: workflows = [] } = useQuery({ queryKey: ['workflows', wsId], queryFn: () => get<Workflow[]>(`/workspaces/${wsId}/workflows`) })
   const { data: types = [] } = useQuery({ queryKey: ['types', wsId], queryFn: () => get<TaskType[]>(`/workspaces/${wsId}/task-types`) })
 
   const [createOpen, setCreateOpen] = useState(false)
@@ -237,7 +241,7 @@ export default function BoardPage() {
       <DndContext sensors={sensors} onDragStart={onDragStart} onDragOver={onDragOver} onDragEnd={onDragEnd} onDragCancel={() => { setActiveTask(null); setHoverLane(null) }}>
         <Box sx={{ display: 'flex', gap: 2, px: { xs: 2, md: 3.5 }, pb: 3.5, overflowX: 'auto', flexGrow: 1, minHeight: 0 }}>
           {lanes.map(lane => (
-            <LaneColumn key={lane.id} lane={lane} agents={agents} teams={teams}
+            <LaneColumn key={lane.id} lane={lane} agents={agents} workflows={workflows}
               tasks={filtered.filter(t => t.laneId === lane.id || (!t.laneId && lane.kind === (t.status === 'in_progress' ? 'work' : t.status)))}
               onOpen={id => nav(`/ws/${wsId}/tasks/${id}`)} onCreate={() => setCreateOpen(true)}
               dropState={hoverLane?.id === lane.id ? (hoverLane.ok ? 'ok' : 'bad') : null} />
@@ -246,14 +250,14 @@ export default function BoardPage() {
         <DragOverlay dropAnimation={null}>
           {activeTask && (
             <Paper sx={{ p: 1.75, width: 288, transform: 'rotate(1.5deg)', boxShadow: '0 18px 48px rgba(29,36,58,0.22)', borderRadius: 3, cursor: 'grabbing' }}>
-              <CardBody task={activeTask} agents={agents} teams={teams} />
+              <CardBody task={activeTask} agents={agents} workflows={workflows} />
             </Paper>
           )}
         </DragOverlay>
       </DndContext>
 
       <CreateTaskDialog open={createOpen} onClose={() => setCreateOpen(false)} wsId={wsId} boardId={boardId || ''}
-        projects={projects} agents={agents} teams={teams} types={types}
+        projects={projects} agents={agents} workflows={workflows} types={types}
         onCreated={() => { invalidate(); toast('任务已创建（待规划）', 'success') }} />
     </Box>
   )
@@ -263,9 +267,9 @@ function renderTemplate(tpl: string, vars: Record<string, string>): string {
   return tpl.replace(/\{\{(\w+)\}\}/g, (_, k) => vars[k] ?? `{{${k}}}`)
 }
 
-function CreateTaskDialog({ open, onClose, wsId, boardId, projects, agents, teams, types, onCreated }: {
+function CreateTaskDialog({ open, onClose, wsId, boardId, projects, agents, workflows, types, onCreated }: {
   open: boolean; onClose: () => void; wsId: string; boardId: string
-  projects: Project[]; agents: Agent[]; teams: { team: Team }[]; types: TaskType[]; onCreated: () => void
+  projects: Project[]; agents: Agent[]; workflows: Workflow[]; types: TaskType[]; onCreated: () => void
 }) {
   const [title, setTitle] = useState('')
   const [content, setContent] = useState('')
@@ -288,13 +292,11 @@ function CreateTaskDialog({ open, onClose, wsId, boardId, projects, agents, team
         await post(`/task-types/${typeId}/instantiate`, {
           variables: vars, projectId: projectId || undefined, priority,
           assigneeAgentId: kind === 'agent' ? id : undefined,
-          assigneeTeamId: kind === 'team' ? id : undefined,
         })
       } else {
         await post('/tasks', {
           boardId, title, content, projectId: projectId || undefined, priority,
           assigneeAgentId: kind === 'agent' ? id : undefined,
-          assigneeTeamId: kind === 'team' ? id : undefined,
         })
       }
       onCreated(); onClose()
@@ -342,7 +344,6 @@ function CreateTaskDialog({ open, onClose, wsId, boardId, projects, agents, team
         <TextField select label="指派（留空自动匹配）" value={assignee} onChange={e => setAssignee(e.target.value)}>
           <MenuItem value="">自动匹配</MenuItem>
           {agents.map(a => <MenuItem key={a.id} value={`agent:${a.id}`}><SmartToyIcon fontSize="small" sx={{ mr: 1, color: 'text.secondary' }} />{a.name}</MenuItem>)}
-          {teams.map(t => <MenuItem key={t.team.id} value={`team:${t.team.id}`}><GroupsIcon fontSize="small" sx={{ mr: 1, color: 'text.secondary' }} />{t.team.name}</MenuItem>)}
         </TextField>
         {err && <Typography color="error">{err}</Typography>}
       </DialogContent>

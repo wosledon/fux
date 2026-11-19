@@ -87,7 +87,11 @@ async fn scan(state: &SharedState) -> anyhow::Result<()> {
             Ok(t) => t,
             Err(_) => continue,
         };
-        if task.status != "in_progress" || task.lease_run_id.as_deref() != Some(run.id.as_str()) {
+        if task.status != "in_progress" {
+            continue;
+        }
+        let is_workflow_run = run.stage_key.is_some();
+        if !is_workflow_run && task.lease_run_id.as_deref() != Some(run.id.as_str()) {
             continue;
         }
         let agent = match sqlx::query_as::<_, Agent>("SELECT * FROM agents WHERE id = ?")
@@ -198,6 +202,9 @@ async fn scan(state: &SharedState) -> anyhow::Result<()> {
             .bind(&run.id)
             .execute(&state.db)
             .await;
+            if is_workflow_run {
+                crate::server::workflow::cancel_active(state, &task.id, Some(&run.id)).await;
+            }
             let _ = domain::move_task(
                 state,
                 &task.id,

@@ -50,9 +50,10 @@ export type TaskStatus = 'planning' | 'ready' | 'in_progress' | 'review' | 'bloc
 export interface Task {
   id: string; boardId: string; workspaceId: string; typeId?: string; projectId?: string
   title: string; content: string; status: TaskStatus; blockedFrom?: string; blockReason?: string
-  laneId?: string; priority: number; tags: string; assigneeAgentId?: string; assigneeTeamId?: string
+  laneId?: string; priority: number; tags: string; assigneeAgentId?: string; workflowId?: string
   branch?: string; prUrl?: string; prState?: string; mergeCommit?: string
   retryCount: number; version: number; createdBy?: string; createdAt: string; updatedAt: string
+  workflowName?: string; stageTotal?: number; stageDone?: number
 }
 export interface TaskType { id: string; workspaceId: string; name: string; icon: string; titleTemplate: string; contentTemplate: string; variablesSchema: string; defaults: string }
 export interface CliEntry { id: string; workspaceId?: string; name: string; kind: string; command: string; args: string; envTemplate: string; isDefault: number }
@@ -61,11 +62,21 @@ export interface Agent {
   systemPrompt: string; policy: string; gates: string; maxConcurrent: number; paused: number; matchTags: string
   skillIds?: string[]; mcpServers?: { id: string; toolWhitelist: string[] }[]
 }
-export interface Team { id: string; workspaceId: string; name: string; mode: 'pipeline' | 'supervisor' }
-export interface TeamMember { teamId: string; agentId: string; role: string; position: number }
+export interface WorkflowStage {
+  key: string; name: string; agentId: string; projectId?: string
+  promptAppend?: string; dependsOn: string[]; when?: string; x?: number; y?: number
+}
+export interface Workflow {
+  id: string; workspaceId: string; name: string; description: string
+  stages: string; createdAt: string; updatedAt: string
+}
+export interface Delivery {
+  id: string; taskId: string; projectId: string; nodeKey: string
+  branch?: string; prUrl?: string; prState?: string; mergeCommit?: string; createdAt: string
+}
 export interface Skill { id: string; workspaceId: string; name: string; description: string; source: string; version: string; content: string }
 export interface McpServer { id: string; workspaceId: string; name: string; transport: 'stdio' | 'sse' | 'http'; command?: string; args: string; url?: string; envJson: string; status: string }
-export interface Run { id: string; taskId: string; agentId: string; teamId?: string; nodeId: string; stage: number; retryCount: number; status: string; stopReason?: string; turnCount: number; usageTokens: number; startedAt: string; endedAt?: string }
+export interface Run { id: string; taskId: string; agentId: string; nodeId: string; stage: number; stageKey?: string; projectId?: string; branch?: string; headSha?: string; retryCount: number; status: string; stopReason?: string; turnCount: number; usageTokens: number; startedAt: string; endedAt?: string }
 export interface NodeInfo { id: string; name: string; mode: string; approved: number; connStatus: string; capabilities: string; lastHeartbeat?: string; createdAt: string }
 export interface TaskEvent { id: number; taskId: string; seq: number; kind: string; actor: string; runId?: string; payload: string; createdAt: string }
 export interface Envelope { workspaceId: string; taskId: string; seq: number; kind: string; actor: string; runId?: string; payload: any; createdAt: string }
@@ -85,6 +96,12 @@ export const STATUS_LABEL: Record<TaskStatus, string> = {
 export const STATUS_COLOR: Record<TaskStatus, 'default' | 'primary' | 'secondary' | 'warning' | 'error' | 'success' | 'info'> = {
   planning: 'default', ready: 'info', in_progress: 'primary', review: 'secondary',
   blocked: 'error', done: 'success', archived: 'default', cancelled: 'default',
+}
+export const STAGE_LABEL: Record<string, string> = {
+  pending: '待执行', running: '执行中', succeeded: '已完成', failed: '失败', cancelled: '已取消', skipped: '已跳过',
+}
+export const STAGE_COLOR: Record<string, 'default' | 'primary' | 'success' | 'error' | 'warning' | 'info'> = {
+  pending: 'default', running: 'primary', succeeded: 'success', failed: 'error', cancelled: 'warning', skipped: 'default',
 }
 export const parseJson = <T = any>(s: string | undefined | null, fallback: T): T => {
   if (!s) return fallback

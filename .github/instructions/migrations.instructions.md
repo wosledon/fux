@@ -15,14 +15,14 @@ applyTo: ["migrations/**"]
 
 ## 列类型约定（全库一致）
 
-| 用途 | 写法 |
-| ---- | ---- |
-| 主键 | `id TEXT PRIMARY KEY`（值为 `crate::new_id()` 的 UUID v4） |
-| 时间戳 | `TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ','now'))` |
-| 租户 | `workspace_id TEXT NOT NULL REFERENCES workspaces(id) ON DELETE CASCADE` |
-| 枚举 | `TEXT NOT NULL CHECK (x IN ('a','b'))` |
-| JSON | `TEXT NOT NULL DEFAULT '{}'`（或 `'[]'`），由 `serde_json` 手工读写，**不用** SQLite JSON1 |
-| 布尔 | `INTEGER NOT NULL DEFAULT 0` |
+| 用途   | 写法                                                                                       |
+| ------ | ------------------------------------------------------------------------------------------ |
+| 主键   | `id TEXT PRIMARY KEY`（值为 `crate::new_id()` 的 UUID v4）                                 |
+| 时间戳 | `TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ','now'))`                             |
+| 租户   | `workspace_id TEXT NOT NULL REFERENCES workspaces(id) ON DELETE CASCADE`                   |
+| 枚举   | `TEXT NOT NULL CHECK (x IN ('a','b'))`                                                     |
+| JSON   | `TEXT NOT NULL DEFAULT '{}'`（或 `'[]'`），由 `serde_json` 手工读写，**不用** SQLite JSON1 |
+| 布尔   | `INTEGER NOT NULL DEFAULT 0`                                                               |
 
 时间戳是固定毫秒 UTC 字符串，因此可以直接字符串比较排序（调度器、通知都依赖这一点）。写入时用 `crate::now()`，与 `DEFAULT` 格式保持一致。
 
@@ -32,7 +32,7 @@ applyTo: ["migrations/**"]
 - `tasks.status`：`planning | ready | in_progress | review | blocked | done | archived | cancelled`
 - `lanes.kind`：`planning | ready | work | review | blocked | done | archived`
 - `projects.kind`：`git | local`
-- `agent_teams.mode`：`pipeline | supervisor`
+- `workflows.stages` 为节点 DAG JSON，无 CHECK；`runs.status` 为自由字符串（running/finished/failed/cancelled/skipped）
 - `mcp_servers.transport`：`stdio | sse | http`
 
 改这些取值必须同步：`server/domain.rs`（`legal` / `user_can` / `lane_kind`）、`migrations` 的 CHECK、前端 `api.ts` 的 `TaskStatus` / `LaneKind` 与 `STATUS_LABEL`。

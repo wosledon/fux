@@ -1,7 +1,7 @@
 # Fux — AI 工作台 PRD
 
-> 版本：v0.3（决策确认稿）· 2026-11-18
-> 定位：以「自驱动看板 + 智能体团队」为核心的 AI 工作台。人定义目标、评审结果；智能体认领任务、执行工作、流式交付过程。
+> 版本：v0.4（决策确认稿）· 2026-11-19
+> 定位：以「自驱动看板 + 标准工作流」为核心的 AI 工作台。人定义目标、评审结果；智能体按固化工作流认领任务、执行工作、流式交付过程。
 > 核心原则：**不自建 Agent loop**（一切智能体绑定 ACP CLI）、**不接 Git 平台 API**（git 原生 + 用户自理凭据）、**不做集群**（runtime 安装即注册）、**不做成本预算**（以质量阀防失控）。
 
 ## 1. 产品概述
@@ -14,21 +14,22 @@
 
 ### 1.2 目标（v1）
 
-| #   | 目标                                                                                            |
-| --- | ----------------------------------------------------------------------------------------------- |
-| G1  | 工作区内统一管理项目（git / 本地目录）、智能体、SKILL / MCP；支持邀请成员协作                   |
-| G2  | 可定制看板（泳道左右滑动）：任务按状态机流转，智能体自动认领并执行                              |
-| G3  | 任务全过程可见：GitHub Issue 式时间线 + 流式输出，人可随时评论干预                              |
-| G4  | 智能体团队协同工作，团队状态与过程透明                                                          |
-| G5  | 通过 ACP 接入 CLI（首批 Codex / OpenCode / Pi / Copilot CLI），每个智能体独立绑定模型与推理强度 |
-| G6  | 审核强制对接 PR/MR（git 原生实现），合并检测闭环                                                |
-| G7  | 多节点：另一台电脑安装 runtime 即注册加入（WS/SSE），远程执行 CLI；不做集群                     |
-| G8  | 质量阀：循环抽搐 / 停滞 / 突然中断的检测与熔断，防止工作失控                                    |
+| #   | 目标                                                                                                                |
+| --- | ------------------------------------------------------------------------------------------------------------------- |
+| G1  | 工作区内统一管理项目（git / 本地目录）、智能体、SKILL / MCP；支持邀请成员协作                                       |
+| G2  | 可定制看板（泳道左右滑动）：任务按状态机流转，智能体自动认领并执行                                                  |
+| G3  | 任务全过程可见：GitHub Issue 式时间线 + 流式输出，人可随时评论干预                                                  |
+| G4  | 固化多节点编排（DAG + 并行）：节点可绑定不同项目（如先出 proto 再前后端并行开发），产物自动交接，节点状态与过程可见 |
+| G5  | 通过 ACP 接入 CLI（首批 Codex / OpenCode / Pi / Copilot CLI），每个智能体独立绑定模型与推理强度                     |
+| G6  | 审核强制对接 PR/MR（git 原生实现），合并检测闭环                                                                    |
+| G7  | 多节点：另一台电脑安装 runtime 即注册加入（WS/SSE），远程执行 CLI；不做集群                                         |
+| G8  | 质量阀：循环抽搐 / 停滞 / 突然中断的检测与熔断，防止工作失控                                                        |
 
 ### 1.3 非目标（v1 边界）
 
 - 不做 Git 托管平台，**不接 GitHub / GitLab 等平台 API**：只调用 git CLI，认证 / 代理 / 凭据由用户在执行节点自行配置。
 - 不自建 Agent loop、不做直连 LLM API 的内置运行时：所有智能体（含 AI 助理）一律绑定 ACP CLI。
+- 编排只以**工作区工作流模板**固化（DAG 显式、可审计、可复用）；不做运行时动态分派（主管模式）、循环依赖、运行中改节点定义；节点跳过条件仅支持声明式表达式。
 - 不做集群编排（K8s / 分布式共识）：单控制面 + 轻量 runtime 注册，状态集中在控制面。
 - 不做多租户 SaaS 与计费；多用户通过工作区邀请 + 角色权限实现。
 - 不做成本预算 / 费用管控；以质量阀（FR-13）保障执行不失控。
@@ -36,23 +37,24 @@
 
 ## 2. 核心概念（领域模型）
 
-| 概念                 | 说明                                                                               |
-| -------------------- | ---------------------------------------------------------------------------------- |
-| Workspace 工作区     | 顶层隔离单元：项目、看板、智能体、SKILL / MCP、成员均归属于工作区                  |
-| Member 成员          | 工作区内的用户，角色 owner / admin / member；通过邀请加入                          |
-| Project 项目         | 一个 git 仓库（任意 remote）或本地目录；git 凭据用户自理，Fux 只调用 git CLI       |
-| Board 看板           | 工作区内的任务看板，由泳道（Lane）组成，横向布局可左右滑动                         |
-| Lane 泳道            | 语义泳道（规划/待办/审核/阻塞/完成/归档，均独立）+ 可自定义多个「工作子泳道」      |
-| TaskType 任务类型    | 任务模板：标题模板 + 内容（提示词）模板 + 变量槽 + 默认属性                        |
-| Task 任务            | 看板卡片；由任务类型实例化或自由创建；状态机驱动流转                               |
-| Agent 智能体         | 绑定一个 ACP CLI 条目 + 模型 + 推理强度 + 提示词 + SKILL / MCP 授权（无内置 loop） |
-| AgentTeam 智能体团队 | 多智能体编排：流水线（阶段交接）或主管（分派-汇总）两种模式                        |
-| Run 运行             | 一次「智能体 × 任务」的执行实例；含 ACP 会话、节点、执行统计、质量阀状态           |
-| TaskEvent 任务事件   | 时间线的唯一事实来源：状态变更、消息、工具调用、评论、质量阀事件均为事件           |
-| PR/MR 交付物         | 任务分支 + PR/MR 链接 + 合并状态；审核的唯一依据（git 原生检测）                   |
-| SKILL                | 以 SKILL.md 为入口的能力包，按智能体授权启用                                       |
-| MCP Server           | 外部工具服务（stdio / SSE / Streamable HTTP），按智能体授权 + 工具白名单           |
-| Node 节点            | 安装 fux-runtime 后自动注册进来的执行器；承载 Run 与本地仓库检出                   |
+| 概念               | 说明                                                                                                    |
+| ------------------ | ------------------------------------------------------------------------------------------------------- |
+| Workspace 工作区   | 顶层隔离单元：项目、看板、智能体、SKILL / MCP、成员均归属于工作区                                       |
+| Member 成员        | 工作区内的用户，角色 owner / admin / member；通过邀请加入                                               |
+| Project 项目       | 一个 git 仓库（任意 remote）或本地目录；git 凭据用户自理，Fux 只调用 git CLI                            |
+| Board 看板         | 工作区内的任务看板，由泳道（Lane）组成，横向布局可左右滑动                                              |
+| Lane 泳道          | 语义泳道（规划/待办/审核/阻塞/完成/归档，均独立）+ 可自定义多个「工作子泳道」                           |
+| TaskType 任务类型  | 任务模板：标题模板 + 内容（提示词）模板 + 变量槽 + 默认属性                                             |
+| Task 任务          | 看板卡片；由任务类型实例化或自由创建；状态机驱动流转                                                    |
+| Agent 智能体       | 绑定一个 ACP CLI 条目 + 模型 + 推理强度 + 提示词 + SKILL / MCP 授权（无内置 loop）                      |
+| Workflow 工作流    | 固化的多节点编排模板：节点 DAG，每个节点绑定智能体 + 执行项目 + 追加提示词 + 依赖                       |
+| Artifact 节点产物  | 某节点在某项目上的产出：项目 + 分支 + commit + 变更文件 + 摘要；下游节点据此引用上游成果                |
+| Run 运行           | 一次「节点 × 智能体 × 项目」的执行实例；含 ACP 会话、节点、执行统计、质量阀状态（非工作流任务即单节点） |
+| TaskEvent 任务事件 | 时间线的唯一事实来源：状态变更、消息、工具调用、评论、质量阀事件均为事件                                |
+| PR/MR 交付物       | 每个项目一条：任务分支 + PR/MR 链接 + 合并状态；全部合并才可批准（git 原生检测）                        |  |
+| SKILL              | 以 SKILL.md 为入口的能力包，按智能体授权启用                                                            |
+| MCP Server         | 外部工具服务（stdio / SSE / Streamable HTTP），按智能体授权 + 工具白名单                                |
+| Node 节点          | 安装 fux-runtime 后自动注册进来的执行器；承载 Run 与本地仓库检出                                        |
 
 ```mermaid
 flowchart TD
@@ -61,7 +63,7 @@ flowchart TD
     WS --> B[看板]
     WS --> TT[任务类型 xN]
     WS --> A[智能体 xN]
-    WS --> T[智能体团队 xN]
+    WS --> WF[工作流 xN]
     WS --> S[SKILL 库]
     WS --> M[MCP 服务 xN]
     B --> L[泳道: 语义泳道 + 工作子泳道 xN]
@@ -71,7 +73,8 @@ flowchart TD
     TASK --> PR[PR/MR 交付物]
     TASK --> RUN[Run xN]
     A --> RUN
-    T --> RUN
+    WF -.节点派发.-> RUN
+    WF -.发起.-> TASK
     A -.绑定.-> CLI[ACP CLI: Codex/OpenCode/Pi/Copilot]
     A -.授权.-> S
     A -.授权.-> M
@@ -96,7 +99,7 @@ flowchart TD
   - **本地目录**：git 仓库则用 worktree 隔离；非 git 目录提供一键 `git init`，否则以任务工作副本（目录拷贝）隔离。
 - **git 凭据与配置用户自理**：ssh key / credential helper / 代理等由用户在执行节点本地配置好；Fux 只调用 git CLI，不存储 git 凭据、不接平台 API。
 - 添加项目时做连接测试（`git ls-remote` / `git status`），失败给出可操作提示（认证 / 网络 / 路径）。
-- 每个任务执行在独立分支 `fux/task-<id>`（git 项目用 worktree）中进行，避免并发任务互相污染；多节点下每节点各自检出。
+- 每个节点在其**所属项目**的独立分支 `fux/task-<id>/<nodeKey>`（git 项目用 worktree）中进行，避免并发节点/任务互相污染；并行节点各在自己分支，串行节点从父节点产物分支创建。多节点下每节点各自检出。
 - remote URL 仅用于推导 PR/MR 创建链接（见 3.5.5），不做 API 调用。
 - 项目详情页：分支、最近任务、关联 PR/MR 与合并状态。
 - 验收：同一项目可被多个任务并发使用而互不冲突；git 认证失败在时间线清晰报错并可阻塞任务。
@@ -105,7 +108,7 @@ flowchart TD
 
 - 工作区级对话侧栏，上下文自动注入：工作区概览、看板状态摘要、进行中任务列表。
 - 助理**也是一个绑定 CLI 的智能体**（同 FR-06 配置），不单独实现 loop。
-- Fux 提供**内置 MCP Server（workspace 工具集）**：创建任务（选类型填变量）、移动任务、评论、查询看板 / 团队状态；助理通过该 MCP 操作工作台。
+- Fux 提供**内置 MCP Server（workspace 工具集）**：创建任务（选类型填变量）、移动任务、评论、查询看板 / 工作流节点状态；助理通过该 MCP 操作工作台。
 - 验收：对话「把刚才讨论的登录 bug 建个任务」→ 助理经 MCP 生成待规划卡片并回显链接。
 
 ### FR-04 任务类型管理（任务模板）
@@ -122,7 +125,7 @@ flowchart TD
 
 - 语义泳道固定且**各自独立**：**规划 | 待办 | 审核中 | 已阻塞 | 已完成 | 已归档**。
 - 「进行中」是**可自定义的工作子泳道组**（默认 1 个，可增删、排序、命名，如：编码 → 自测 → 提交 PR）。仅工作子泳道允许多个。
-- 每个工作子泳道可配置：WIP 上限、绑定的团队角色 / 智能体（阶段由谁负责）。
+- 每个工作子泳道可配置：WIP 上限、绑定的智能体（该阶段由谁负责）。
 - 「已阻塞」为独立泳道（便于人一眼发现需要介入的任务），数据模型记录 `blocked_from`（来源状态），解除阻塞后**回到来源状态**而非一律回待办。
 - 「已归档」泳道仅显示近 7 天；归档数据永久保留，提供独立归档检索页（按项目/类型/时间过滤）。
 - **横向布局**：泳道定宽，看板整体**左右滚动 / 滑动**（触屏支持）；拖拽卡片到边缘自动滚动；泳道数量不受屏幕限制。
@@ -149,19 +152,20 @@ stateDiagram-v2
 
 状态转移规则（全部转移落库为 TaskEvent，非法转移拒绝并报错）：
 
-| #   | 从          | 到                       | 触发                                                       | 执行者       | 副作用                                                  |
-| --- | ----------- | ------------------------ | ---------------------------------------------------------- | ------------ | ------------------------------------------------------- |
-| T1  | 待规划      | 待办                     | 手动拖拽 / 助理规划完成                                    | 用户         | 进入可认领池                                            |
-| T2  | 待办        | 进行中                   | 自动认领成功                                               | 调度器       | 创建 Run、获取租约、绑定 worktree/分支                  |
-| T3  | 进行中      | 审核中                   | 智能体报告完成                                             | 智能体       | 提交并推送分支、生成/记录 PR/MR 链接（3.5.5）、通知用户 |
-| T4  | 进行中      | 已阻塞                   | 出错 / 质量阀熔断（FR-13）/ 授权超时 / 租约丢失 / 主动求助 | 智能体/系统  | 记录 blocked_from 与原因（含熔断诊断），通知用户        |
-| T5  | 审核中      | 已完成                   | 审核通过（检测到合并或人工确认）                           | 用户(admin+) | 记录 merge_commit，可选清理分支                         |
-| T6  | 审核中      | 待办                     | 驳回 + 评论                                                | 用户         | 评论作为返工指令，retry_count +1，同分支继续            |
-| T7  | 已完成      | 待办                     | 用户评论                                                   | 用户         | 评论成为新一轮工作指令（返工闭环）                      |
-| T8  | 已完成      | 已归档                   | 归档                                                       | 用户         | 看板仅显示近 7 天                                       |
-| T9  | 已阻塞      | blocked_from（缺省待办） | 解除阻塞 / 评论解答                                        | 用户/系统    | 恢复原状态或重新认领                                    |
-| T10 | 待规划/待办 | 已取消                   | 取消                                                       | 用户         | 扩展态，保留记录                                        |
-| T11 | 进行中      | 进行中（子泳道间）       | 阶段交接                                                   | 智能体团队   | 工作子泳道间移动，交接上下文                            |
+| #   | 从          | 到                       | 触发                                                       | 执行者       | 副作用                                                |
+| --- | ----------- | ------------------------ | ---------------------------------------------------------- | ------------ | ----------------------------------------------------- |
+| T1  | 待规划      | 待办                     | 手动拖拽 / 助理规划完成                                    | 用户         | 进入可认领池                                          |
+| T2  | 待办        | 进行中                   | 自动认领成功                                               | 调度器       | 创建 Run、获取租约、绑定 worktree/分支                |
+| T3  | 进行中      | 审核中                   | 末节点完成报告完成                                         | 智能体       | 提交并推送各项目分支、汇总交付清单（3.5.5）、通知用户 |
+| T4  | 进行中      | 已阻塞                   | 出错 / 质量阀熔断（FR-13）/ 授权超时 / 租约丢失 / 主动求助 | 智能体/系统  | 记录 blocked_from 与原因（含熔断诊断），通知用户      |
+| T5  | 审核中      | 已完成                   | 审核通过（检测到合并或人工确认）                           | 用户(admin+) | 记录 merge_commit，可选清理分支                       |
+| T6  | 审核中      | 待办                     | 驳回 + 评论                                                | 用户         | 评论作为返工指令，retry_count +1，同分支继续          |
+| T7  | 已完成      | 待办                     | 用户评论                                                   | 用户         | 评论成为新一轮工作指令（返工闭环）                    |
+| T8  | 已完成      | 已归档                   | 归档                                                       | 用户         | 看板仅显示近 7 天                                     |
+| T9  | 已阻塞      | blocked_from（缺省待办） | 解除阻塞 / 评论解答                                        | 用户/系统    | 恢复原状态或重新认领                                  |
+| T10 | 待规划/待办 | 已取消                   | 取消                                                       | 用户         | 扩展态，保留记录                                      |
+
+> 工作流的节点推进与并行均发生在「进行中」状态内部（同一任务，可落在不同项目的分支上，可同时有多个 Run），不产生状态转移，因此不占用转移编号。
 
 #### 3.5.3 评论语义（按状态区分）
 
@@ -176,7 +180,8 @@ stateDiagram-v2
 
 #### 3.5.4 自动认领与租约
 
-- 调度器周期扫描待办任务，按认领策略匹配：任务类型 / 标签 / 项目 → 智能体或团队的能力声明；支持「指定指派」与「自动匹配」两种。
+- 调度器周期扫描待办任务，按认领策略匹配：任务类型 / 标签 / 项目 → 智能体的能力声明；支持「指定指派」与「自动匹配」两种。工作流任务按 DAG 中当前可执行的节点各自认领（3.6.2）。
+- **工作流的多 Run 并发**：同一任务可同时持有多个 Run，每个 Run 独立租约与心跳（`runs.lease_expires_at`），互不阻塞；任务级 `lease_run_id` 仅用于无工作流的单节点任务。
 - 认领必须是**原子操作**（PG 用 `SELECT ... FOR UPDATE SKIP LOCKED`；SQLite 用事务 + 状态条件更新），多节点 / 多调度器下不重复认领。
 - 认领即建立**租约（lease）**：Run 心跳续约（默认 10s 心跳 / 30s 租约，可配）；租约过期 → 任务回待办并 retry_count +1；超过最大重试（默认 3）→ 已阻塞。
 - 并发控制：每个智能体默认同时 1 个任务（可配）；工作子泳道受 WIP 上限约束。
@@ -185,17 +190,17 @@ stateDiagram-v2
 
 #### 3.5.5 审核与 PR/MR 强制绑定（git 原生，无平台 API）
 
-- **完成的前提**：代码已提交到 `fux/task-<id>` 并推送 remote。无 remote 的项目必须先配置 remote 才能进入审核（强制 PR/MR 的前提）；纯本地目录项目需一键 `git init` + 配置 remote，或明确降级为本地合并模式（唯一例外，需 admin 确认）。
+- **完成的前提**：每个节点所用项目的产出分支都已提交并推送 remote（一个任务可能产出多个项目分支）。无 remote 的项目必须先配置 remote 才能进入审核；纯本地目录项目需一键 `git init` + 配置 remote，或明确降级为本地合并模式（唯一例外，需 admin 确认）。
 - **PR/MR 链接来源**：
   1. 从 remote URL 推导创建链接（GitHub compare / GitLab new MR / 通用 fallback），智能体或用户点击创建；
   2. 节点上若装有 `gh` / `glab` 等 CLI，智能体可**自行创建 PR/MR**（这是智能体自身能力，非 Fux 集成），把实际 URL 回填任务；
   3. 用户手动粘贴已有 PR/MR URL。
-- **审核面板**：任务详情展示本地 diff（`git diff base...branch`）+ PR/MR 链接 + 合并状态徽标；审核泳道卡片显示 PR/MR 状态。
-- **合并检测**：控制面周期 `git fetch` + `git merge-base --is-ancestor <branch> origin/<default>` 判定已合并；检测到合并才允许批准（T5）。无法自动检测时（权限 / 离线）允许 admin **人工确认已合并**，留审计记录。
-- 批准 = 确认合并（可选清理分支）；驳回 = 评论返工（T6），智能体在同分支继续工作并更新 PR/MR。
-- 验收：未合并的任务无法批准（人工确认除外）；合并被检测到后一键批准即完成闭环。
+- **交付清单**：一个任务维护多条交付项（项目 + 分支 + PR/MR + 合并状态），跨项目或同项目多终端节点的任务因此会有多条；**审核面板按项目分组**展示，每项独立 diff（`git diff base...branch`）与 PR/MR 状态。
+- **合并检测**：控制面周期对**每条交付项**分别 `git fetch` + `git merge-base --is-ancestor <branch> origin/<default>`；全部交付项检测到合并才允许批准（T5）。无法自动检测时（权限 / 离线）允许 admin **人工确认已合并**，留审计记录。
+- 批准 = 确认全部交付项已合并（可选清理分支）；驳回 = 评论返工（T6），在最后一个节点所属项目上继续工作并更新对应 PR/MR。
+- 验收：任一交付项未合并时无法批准（人工确认除外）；跨项目任务合并后一键完成闭环。
 
-### FR-06 智能体与智能体团队
+### FR-06 智能体与工作流
 
 #### 3.6.1 智能体配置（一切皆 CLI 绑定）
 
@@ -210,27 +215,37 @@ stateDiagram-v2
 | 并发         | 最大并发任务数（默认 1）                                                                             |
 | 质量阀       | 继承工作区默认阈值，可覆盖（FR-13）                                                                  |
 
-#### 3.6.2 团队编排
+#### 3.6.2 工作流（DAG 多节点编排）
 
-- 两种模式：
-  - **流水线**：成员按阶段排序（规划 → 执行 → 评审），与自定义工作子泳道对应，阶段完成自动交接（T11），交接附上下文摘要。
-  - **主管模式**：lead 智能体拆解任务、分派给成员、汇总结果（v1 提供基础实现）。
-- 团队共享上下文：任务内容 + 项目上下文 + 各阶段交接笔记。
-- 团队也可被自动认领匹配（能力声明 = 成员能力并集）。
+- **定义**：工作区级模板，是由节点组成的有向无环图（DAG）。每个节点 = `key` + 名称 + 负责智能体 + **执行项目**（缺省继承主项目）+ 追加提示词 + `dependsOn`（依赖的节点 key 列表，空 = 入口节点）+ 可选 `when`（跳过条件）。保存时校验无环、`key` 唯一、依赖存在。任务主项目 = 收尾节点所属项目（看板筛选与卡片展示用）。
+- **发起**：入口一句话描述任务（可叠加任务类型模板）→ 生成看板卡片（待办）→ 调度器派发所有**入口节点**（无 `dependsOn` 的节点），无需手动指派。
+- **并行推进**：依赖全部 `succeeded` / `skipped` 的节点即可派发；同一任务可同时有多个 Run 在跑。**并行度由 DAG 结构决定**（无并行配置项），仅受各智能体 `maxConcurrent` 约束。每个 Run 独立租约与心跳，互不阻塞。
+- **跳过条件 `when`**：仅声明式表达式（变量比较 / 上游产物路径是否存在 / 标签判断），求值 false → 节点 `skipped`，下游按「依赖已终结」继续。**不做** LLM 动态路由（那属于主管模式，已列为非目标）；用户也可手动跳过节点。
+- **分支与产物**：每个节点在自己的项目上从父节点产物分支创建 `fux/task-<id>/<nodeKey>`（入口节点从默认分支创建）。节点完成即记录产物 `{projectId, remoteUrl, branch, commitSha, files, summary}`，写 `workflow.stage_completed`。
+- **跨项目 / 跨机产物交接**（典型场景：架构师在 proto 仓库出契约 → 前后端两个节点在各自仓库并行开发）：
+  - 产物全部沉淀在 git：上游节点 push 到 remote，下游节点（可以和上游不同机器）`git fetch` 后检出到 `.fux/upstream/<nodeKey>/`（只读），并把「路径 + 变更文件 + 摘要」注入提示词；下游在自己的项目分支上正常开发与提交。
+  - 无 remote 的项目无法跨机协作，只能同机执行（本地产物直接可用）；调度器选节点时需校验其能访问实例涉及的全部 remote。
+- **上下文交接**：任务内容 + 项目上下文 + 各直接上游节点的产物摘要（默认取该节点最近消息 + 变更文件列表）。
+- **终结与审核**：全部节点到达终态（`succeeded` / `skipped`）→ 按项目汇总交付清单进入审核；任一节点 `failed` 且重试耗尽 → 任务 `blocked`（取消其余运行中的节点）。交付点不是唯一的：按项目取该项目的**终端节点**分支，同项目多个并行终端则各成一条交付。
+- **失败与返工**：节点失败按重试策略重跑该节点；超过上限 → `blocked`。解除阻塞时重置失败/取消的节点（成功的保留），从失败节点继续。审核驳回或已完成返工只重置**汇点节点**与其交付；「从节点 N 返工」重置该节点及下游并可取消运行中的 Run，其他分支产物保留。旧 Run 的结束回调会被忽略，不会覆盖新状态。
+- **边界**：无运行时动态分派（主管模式）、无循环依赖、无运行中改节点定义、无条件分支的“跳过”以外的流程控制。
 
-#### 3.6.3 团队工作状态与过程可见
+#### 3.6.3 工作流的呈现（看板与详情）
 
-- 团队面板：成员卡片实时显示当前任务、所处阶段、运行状态、执行统计（轮次/耗时）、最近输出摘要。
-- 任务时间线内，团队事件按成员着色 / 分组，可过滤「只看某成员」。
-- 团队级事件：交接（handoff）、分派（dispatch）、汇总（summary）均入时间线。
+- **工作流页**：模板列表 + 画布式编辑器（拖拽节点、连线建立依赖、自动布局，节点属性面板配置智能体/项目/追加提示词/`when`，画布坐标随模板保存）+ 顶部「一句话发起」入口 + 运行中 / 近期实例列表。
+- **看板**：流程实例就是普通任务卡，**不引入新卡片类型**；卡片角标显示「工作流名 · 3/5 节点 · 2 运行中」，跨项目时额外显示参与项目数。
+- **任务详情 → 流程页签**：**DAG 图（节点 + 依赖连线，按状态着色）** + 节点明细（节点名 / 智能体 / 执行项目 / 状态 / 轮次 / 耗时 / 产物 commit）；点节点只看该 Run 的事件与该项目 diff。状态：`pending / ready / running / succeeded / failed / skipped / cancelled`。
+- **任务详情 → 审核页签**：按项目分组展示交付（分支 / PR-MR / 合并状态 / diff），全部合并才可批准。
+- 不设独立「团队面板」：节点进度长在任务卡与任务详情里，避免与看板并行抢占注意力。
 
 ### FR-07 任务详情与时间线（GitHub Issue 式）
 
 - 点击卡片打开右侧抽屉 / 详情页：元数据（状态、类型、项目、指派、优先级、标签、PR/MR）+ 时间线 + 评论输入框。
-- 时间线事件类型：`task.created / task.moved / run.started / agent.message / agent.thought / tool.call / tool.result / plan.updated / permission.requested / permission.resolved / comment.added / run.finished / task.blocked / pr.linked / pr.merged_detected / watchdog.loop / watchdog.stalled / watchdog.interrupted / usage.updated`。
+- 时间线事件类型：`task.created / task.moved / run.started / agent.message / agent.thought / tool.call / tool.result / plan.updated / permission.requested / permission.resolved / comment.added / run.finished / task.blocked / pr.linked / pr.merged_detected / workflow.stage_completed / workflow.stage_skipped / workflow.stage_failed / workflow.rework_reset / workflow.retry_reset / workflow.rewound / workflow.completed / watchdog.loop / watchdog.stalled / watchdog.interrupted / usage.updated`。
+- **流程页签**：任务属于工作流时，详情展示 **DAG 图**（节点 + 依赖连线，按状态着色）与节点明细（节点名 / 智能体 / 执行项目 / 状态 / 轮次 / 耗时 / 产物 commit），点节点只看该 Run 的事件与该项目 diff；时间线保留全量并可按 Run 分组。
 - **流式输出**：`agent.message` 分片实时追加渲染；工具调用折叠展示（名称、参数摘要、状态图标、耗时），diff 类结果渲染为代码差异视图。
 - 权限请求渲染为可操作卡片（批准 / 拒绝 / 始终允许该工具），超时按策略处理。
-- **PR/MR 审核面板**：diff 视图 + PR/MR 链接 + 合并状态 + 批准 / 驳回按钮（3.5.5）。
+- **PR/MR 审核面板**：按项目分组展示交付（diff + PR/MR 链接 + 合并状态），全部合并后批准 / 驳回（3.5.5）。
 - 质量阀熔断显示诊断卡片：触发原因、最近事件快照、建议操作（FR-13）。
 - 断线重连：SSE 携带 `Last-Event-ID`，从事件序号续传，不丢消息。
 - 评论区支持 Markdown、@智能体（定向引导）、附件（图片 / 文件）。
@@ -339,7 +354,7 @@ stateDiagram-v2
 3. 添加项目（git URL / 本地目录）；在执行节点自行配置好 git（认证 / 代理），连接测试通过。
 4. 在节点安装并认证 CLI（codex / opencode / pi / copilot）。
 5. 导入 SKILL、注册 MCP Server。
-6. 创建智能体（绑定 CLI + 模型 + 推理强度，授权 SKILL 与 MCP）；按需组建团队。
+6. 创建智能体（绑定 CLI + 模型 + 推理强度，授权 SKILL 与 MCP）；按需定义工作流（节点顺序 + 每个节点绑定的智能体）。
 7. 定义任务类型模板；定制看板工作子泳道。
 8. （可选）另一台电脑安装 fux-runtime，配对码加入。
 
@@ -365,6 +380,8 @@ sequenceDiagram
     U->>B: 查看 diff/PR → 批准(已合并) → 已完成 → 归档
 ```
 
+> 工作流实例在上图基础上多一层：每个节点完成即记录产物（项目 / 分支 / commit），再派发依赖已满足的下游节点（**可并行，多个 Run 同时跑**）；全部节点终结才进入审核，审核按项目汇总交付。驳回归工后只重跑当前节点，需要时用户可显式「从节点 N 返工」（重置该节点及其下游）。
+
 ### 4.3 返工与阻塞干预
 
 - 已完成任务评论 → 回待办 → 自动认领 → 新一轮 Run（时间线按 Run 分组，历史保留；同分支继续，PR/MR 自动更新）。
@@ -377,7 +394,7 @@ sequenceDiagram
 ```mermaid
 flowchart LR
     subgraph FE[前端 React 19 + TS + MUI]
-        UI[看板 / 时间线 / 审核面板 / 团队 / 设置]
+        UI[看板 / 时间线 / 审核面板 / 工作流 / 设置]
     end
     subgraph CP[控制面 Actix-web]
         API[REST API]
@@ -419,52 +436,53 @@ flowchart LR
 ### 5.3 前端（React 19 + TS + Material Design / MUI）
 
 - 组件库：**MUI（Material UI）**，Material Design 规范；主题定制（暗色 / 亮色）。
-- 页面：工作区列表 / 看板页 / 任务抽屉（时间线 + 评论 + PR/MR 审核面板）/ 团队面板 / 智能体与 SKILL/MCP 设置 / 成员与邀请 / 节点页（配对）/ 助理侧栏。
+- 页面：工作区列表 / 看板页 / 任务抽屉（时间线 + 评论 + PR/MR 审核面板）/ 工作流页（模板定义 + 一句话发起 + 运行列表）/ 智能体与 SKILL/MCP 设置 / 成员与邀请 / 节点页（配对）/ 助理侧栏。
 - **看板横向滚动**：泳道定宽 + 横向滚动容器，触屏左右滑动，拖拽（dnd-kit）到边缘自动滚动；拖拽即调用状态转移 API，非法转移即时回滚并提示。
 - 状态：服务端状态用 TanStack Query；SSE 事件驱动增量更新（看板卡片移动、时间线追加）。
 - 流式渲染：消息分片合并渲染、工具调用折叠组件、diff 视图、审批卡片、质量阀诊断卡片。
 
 ### 5.4 数据模型（核心表）
 
-| 表                              | 关键字段                                                                                                                                                                                                                       |
-| ------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
-| users                           | id, username/email, password_hash(argon2id), display_name, created_at                                                                                                                                                          |
-| workspace_members               | workspace_id, user_id, role(owner/admin/member), joined_at                                                                                                                                                                     |
-| invitations                     | workspace_id, code, role, expires_at, one_time, created_by, status                                                                                                                                                             |
-| workspaces                      | id, name, settings(json: 审批策略/认领策略/质量阀默认), created_at                                                                                                                                                             |
-| projects                        | id, workspace_id, name, kind(git/local), remote_url/local_path, default_branch（无凭据字段，git 用户自理）                                                                                                                     |
-| boards / lanes                  | board: workspace_id, config；lane: board_id, kind(planning/ready/work/review/blocked/done/archived), name, position, wip_limit, stage_role                                                                                     |
-| task_types                      | id, workspace_id, name, title_template, content_template, variables_schema(json), defaults(json)                                                                                                                               |
-| tasks                           | id, board_id, type_id, project_id, title, content, status, blocked_from, lane_id, priority, tags, assignee, branch, pr_url, pr_state(open/merged/closed), merge_commit, retry_count, lease_owner, lease_expires_at, timestamps |
-| task_events                     | task_id, seq(单调), kind, actor(user/agent/system), run_id, payload(json), created_at                                                                                                                                          |
-| cli_entries                     | id, workspace_id(或全局), name, kind(codex/opencode/pi/copilot/custom), command, args, env_template                                                                                                                            |
-| agents                          | id, workspace_id, name, cli_entry_id, model, reasoning_effort, system_prompt, policy(json), gates(json), max_concurrent                                                                                                        |
-| agent_teams / team_members      | team: mode(pipeline/supervisor)；member: team_id, agent_id, role, position                                                                                                                                                     |
-| skills / agent_skills           | skill: workspace_id, name, source, version；授权关系表                                                                                                                                                                         |
-| mcp_servers / agent_mcp_servers | server: transport, command/url, secret_refs, status；授权 + tool_whitelist                                                                                                                                                     |
-| runs                            | id, task_id, agent_id/team_id, node_id, acp_session_id, status, stop_reason(watchdog/...), turn_count, last_event_at, retry_of, usage(tokens, 仅展示), started_at, ended_at                                                    |
-| nodes                           | id, name, mode(runtime), conn_status, capabilities(json: os/clis/project_paths), last_heartbeat, status(pending/online/offline), approved_by                                                                                   |
-| pairing_tokens                  | code, expires_at, one_time, created_by, used_by_node                                                                                                                                                                           |
-| secrets                         | id, workspace_id, key, encrypted_value（仅 MCP 等密钥）                                                                                                                                                                        |
-| approvals                       | id, run_id, request(json), status, decided_by, decided_at                                                                                                                                                                      |
+| 表                              | 关键字段                                                                                                                                                                                                                                                                                                     |
+| ------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| users                           | id, username/email, password_hash(argon2id), display_name, created_at                                                                                                                                                                                                                                        |
+| workspace_members               | workspace_id, user_id, role(owner/admin/member), joined_at                                                                                                                                                                                                                                                   |
+| invitations                     | workspace_id, code, role, expires_at, one_time, created_by, status                                                                                                                                                                                                                                           |
+| workspaces                      | id, name, settings(json: 审批策略/认领策略/质量阀默认), created_at                                                                                                                                                                                                                                           |
+| projects                        | id, workspace_id, name, kind(git/local), remote_url/local_path, default_branch（无凭据字段，git 用户自理）                                                                                                                                                                                                   |
+| boards / lanes                  | board: workspace_id, config；lane: board_id, kind(planning/ready/work/review/blocked/done/archived), name, position, wip_limit, stage_role                                                                                                                                                                   |
+| task_types                      | id, workspace_id, name, title_template, content_template, variables_schema(json), defaults(json)                                                                                                                                                                                                             |
+| tasks                           | id, board_id, type_id, workflow_id, project_id(主项目), title, content, status, blocked_from, lane_id, priority, tags, assignee(非工作流任务的人工指派), retry_count, lease_owner, lease_expires_at, timestamps；工作流节点进度由 runs 派生                                                                  |
+| task_events                     | task_id, seq(单调), kind, actor(user/agent/system), run_id, payload(json), created_at                                                                                                                                                                                                                        |
+| cli_entries                     | id, workspace_id(或全局), name, kind(codex/opencode/pi/copilot/custom), command, args, env_template                                                                                                                                                                                                          |
+| agents                          | id, workspace_id, name, cli_entry_id, model, reasoning_effort, system_prompt, policy(json), gates(json), max_concurrent                                                                                                                                                                                      |
+| workflows                       | id, workspace_id, name, description, stages(json: [{key, name, agent_id, project_id, prompt_append, depends_on, when, x, y}]), created_at, updated_at                                                                                                                                                |
+| skills / agent_skills           | skill: workspace_id, name, source, version；授权关系表                                                                                                                                                                                                                                                       |
+| mcp_servers / agent_mcp_servers | server: transport, command/url, secret_refs, status；授权 + tool_whitelist                                                                                                                                                                                                                                   |
+| runs                            | id, task_id, agent_id, stage(节点 key), project_id(节点项目), branch, head_sha(节点产物), node_id, acp_session_id, status(pending/running/succeeded/failed/skipped/cancelled), lease_expires_at, stop_reason(watchdog/...), turn_count, last_event_at, retry_of, usage(tokens, 仅展示), started_at, ended_at |
+| deliveries                      | id, task_id, project_id, node_key, branch, pr_url, pr_state(open/merged/closed), merge_commit, created_at；一个任务多条（跨项目 / 多终端节点）                                                                                                                                                               |
+| nodes                           | id, name, mode(runtime), conn_status, capabilities(json: os/clis/project_paths), last_heartbeat, status(pending/online/offline), approved_by                                                                                                                                                                 |
+| pairing_tokens                  | code, expires_at, one_time, created_by, used_by_node                                                                                                                                                                                                                                                         |
+| secrets                         | id, workspace_id, key, encrypted_value（仅 MCP 等密钥）                                                                                                                                                                                                                                                      |
+| approvals                       | id, run_id, request(json), status, decided_by, decided_at                                                                                                                                                                                                                                                    |
 
 ### 5.5 API 概览（REST `/api/v1`）
 
-| 资源                | 端点示例                                                                                                                            |
-| ------------------- | ----------------------------------------------------------------------------------------------------------------------------------- |
-| 认证 / 我           | `POST /auth/register`，`POST /auth/login`，`GET /me`                                                                                |
-| 工作区 / 成员       | `GET/POST /workspaces`，`GET/POST /workspaces/{id}/members`，`POST /workspaces/{id}/invitations`，`POST /invitations/{code}/accept` |
-| 项目                | `POST /workspaces/{id}/projects`，`POST /projects/{id}/test-connection`                                                             |
-| 看板 / 泳道         | `GET /boards/{id}`，`PUT /boards/{id}/lanes`                                                                                        |
-| 任务类型            | `GET/POST /task-types`，`POST /task-types/{id}/instantiate`                                                                         |
-| 任务                | `GET/POST /tasks`，`POST /tasks/{id}/transition`，`POST /tasks/{id}/comments`，`POST /tasks/{id}/archive`                           |
-| PR/MR               | `GET/POST /tasks/{id}/pull-request`（链接/状态），`POST /tasks/{id}/check-merge`                                                    |
-| 审批                | `POST /approvals/{id}/decide`                                                                                                       |
-| 智能体 / 团队 / CLI | `GET/POST /agents`，`GET/POST /teams`，`GET/POST /cli-entries`，`POST /cli-entries/{id}/probe`，`POST /agents/{id}/pause`           |
-| SKILL / MCP         | `GET/POST /skills`，`GET/POST /mcp-servers`，`POST /mcp-servers/{id}/probe`                                                         |
-| 节点                | `GET /nodes`，`POST /nodes/pairing-codes`，`POST /nodes/{id}/approve`，`DELETE /nodes/{id}`                                         |
-| 助理                | `POST /assistant/chat`（SSE 响应）                                                                                                  |
-| 事件流              | `GET /tasks/{id}/events`（SSE），`GET /workspaces/{id}/events`（SSE）                                                               |
+| 资源                  | 端点示例                                                                                                                                                                                                  |
+| --------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| 认证 / 我             | `POST /auth/register`，`POST /auth/login`，`GET /me`                                                                                                                                                      |
+| 工作区 / 成员         | `GET/POST /workspaces`，`GET/POST /workspaces/{id}/members`，`POST /workspaces/{id}/invitations`，`POST /invitations/{code}/accept`                                                                       |
+| 项目                  | `POST /workspaces/{id}/projects`，`POST /projects/{id}/test-connection`                                                                                                                                   |
+| 看板 / 泳道           | `GET /boards/{id}`，`PUT /boards/{id}/lanes`                                                                                                                                                              |
+| 任务类型              | `GET/POST /task-types`，`POST /task-types/{id}/instantiate`                                                                                                                                               |
+| 任务                  | `GET/POST /tasks`，`POST /tasks/{id}/transition`，`POST /tasks/{id}/comments`，`POST /tasks/{id}/archive`                                                                                                 |
+| 任务交付              | `GET/POST /tasks/{id}/deliveries`（按项目登记/回填 PR 链接），`POST /tasks/{id}/check-merge`，`POST /tasks/{id}/rewind`（从节点 N 返工），`POST /tasks/{id}/stages/{key}/skip`（人工跳过节点）            |
+| 审批                  | `POST /approvals/{id}/decide`                                                                                                                                                                             |
+| 智能体 / 工作流 / CLI | `GET/POST /agents`，`GET/POST /workspaces/{id}/workflows`，`PATCH/DELETE /workflows/{id}`，`POST /workflows/{id}/run`，`GET/POST /cli-entries`，`POST /cli-entries/{id}/probe`，`POST /agents/{id}/pause` |
+| SKILL / MCP           | `GET/POST /skills`，`GET/POST /mcp-servers`，`POST /mcp-servers/{id}/probe`                                                                                                                               |
+| 节点                  | `GET /nodes`，`POST /nodes/pairing-codes`，`POST /nodes/{id}/approve`，`DELETE /nodes/{id}`                                                                                                               |
+| 助理                  | `POST /assistant/chat`（SSE 响应）                                                                                                                                                                        |
+| 事件流                | `GET /tasks/{id}/events`（SSE），`GET /workspaces/{id}/events`（SSE）                                                                                                                                     |
 
 内部接口（runtime ↔ 控制面）：`/node-channel`（出站 WS：配对认证、能力上报、Run 派发 / ACP 帧转发 / 事件上报 / 心跳租约续约）。
 
@@ -482,31 +500,34 @@ flowchart LR
 
 ## 7. 里程碑（均在 v1 范围内）
 
-| 阶段                         | 范围                                                                                                                                            | 验收标准                                                                    |
-| ---------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------- | --------------------------------------------------------------------------- |
-| M0 骨架                      | Actix-web + SQLx 迁移 + React(MUI) 脚手架；账号注册登录；工作区 / 项目（git/本地）CRUD                                                          | 注册后创建工作区并添加 git 项目，连接测试通过                               |
-| M1 手动看板 + 协作           | 看板 / 泳道（横向滚动）/ 任务 / 任务类型；手动拖拽；评论时间线；归档 7 天过滤；成员邀请与角色                                                   | 模板建卡 → 手动走完全流程；邀请成员并按角色限权                             |
-| M2 单智能体 + PR/MR + 质量阀 | ACP Client + OpenCode 跑通；自动认领 + 租约；SSE 流式时间线；评论引导；push + PR/MR 链接 + 合并检测 + 返工闭环；质量阀（中断/硬上限/循环/停滞） | 待办任务自动执行并流式可见；未合并不可批准；杀进程自动回收；mock 循环被熔断 |
-| M3 多 CLI + SKILL/MCP        | Codex / Pi / Copilot CLI 适配 + 注册表；模型 / 推理强度配置；审批卡片；SKILL/MCP 管理与授权；内置 workspace MCP                                 | 四个 CLI 各跑通一个任务；MCP 工具受白名单约束；助理经 MCP 建卡              |
-| M4 团队                      | 流水线 / 主管编排；多工作子泳道；团队状态面板                                                                                                   | 团队按阶段交接完成任务，成员过程可按人过滤查看                              |
-| M5 多节点                    | fux-runtime 配对加入（WS）；能力注册；亲和调度；租约回收                                                                                        | 全新机器 ≤ 5 分钟上线；任务分发到远程节点 CLI 执行；节点下线任务自动回收    |
+| 阶段                         | 范围                                                                                                                                            | 验收标准                                                                                      |
+| ---------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------- | --------------------------------------------------------------------------------------------- |
+| M0 骨架                      | Actix-web + SQLx 迁移 + React(MUI) 脚手架；账号注册登录；工作区 / 项目（git/本地）CRUD                                                          | 注册后创建工作区并添加 git 项目，连接测试通过                                                 |
+| M1 手动看板 + 协作           | 看板 / 泳道（横向滚动）/ 任务 / 任务类型；手动拖拽；评论时间线；归档 7 天过滤；成员邀请与角色                                                   | 模板建卡 → 手动走完全流程；邀请成员并按角色限权                                               |
+| M2 单智能体 + PR/MR + 质量阀 | ACP Client + OpenCode 跑通；自动认领 + 租约；SSE 流式时间线；评论引导；push + PR/MR 链接 + 合并检测 + 返工闭环；质量阀（中断/硬上限/循环/停滞） | 待办任务自动执行并流式可见；未合并不可批准；杀进程自动回收；mock 循环被熔断                   |
+| M3 多 CLI + SKILL/MCP        | Codex / Pi / Copilot CLI 适配 + 注册表；模型 / 推理强度配置；审批卡片；SKILL/MCP 管理与授权；内置 workspace MCP                                 | 四个 CLI 各跑通一个任务；MCP 工具受白名单约束；助理经 MCP 建卡                                |
+| M4 工作流                    | 工作流模板（节点 DAG，绑定智能体与项目）+ 依赖满足即并行推进 + 任务详情 DAG 视图 + 看板进度角标                                                 | 一句话发起 → 依赖满足即并行推进（可跨项目）→ 全部节点终结后进入审核；每个节点的状态与过程可查 |
+| M5 多节点                    | fux-runtime 配对加入（WS）；能力注册；亲和调度；租约回收                                                                                        | 全新机器 ≤ 5 分钟上线；任务分发到远程节点 CLI 执行；节点下线任务自动回收                      |
 
 ## 8. 决策记录与剩余风险
 
 ### 8.1 已确认决策
 
-| #   | 决策                                                                                    |
-| --- | --------------------------------------------------------------------------------------- |
-| 1   | 前端 UI = Material Design（MUI）                                                        |
-| 2   | 「已阻塞」保留独立泳道；看板泳道左右滑动即可                                            |
-| 3   | ACP 首批适配 Codex / OpenCode / Pi / Copilot CLI（默认内置条目）                        |
-| 4   | 多节点 = runtime 安装即注册（WS/SSE 出站，免复杂配置）；不做集群；SSH 非必需（v1 不做） |
-| 5   | 审核强制对接 PR/MR；以 git 原生方式实现（推分支 + 链接 + 合并检测），不接平台 API       |
-| 6   | 不做成本预算；改为质量阀（循环抽搐 / 停滞 / 突然中断 / 硬上限熔断）                     |
-| 7   | 进行中评论注入时机 = 排队到当前 turn 结束后注入，时间线标注送达状态                     |
-| 8   | 多用户：工作区内邀请成员，owner / admin / member 三角色                                 |
-| 9   | 项目 = git 仓库 + 本地目录；git 凭据 / 配置用户本地自理，不区分 GitHub / GitLab         |
-| 10  | 不实现内置 Agent loop：所有智能体（含助理）直接绑定 CLI + 模型 + 推理强度               |
+| #   | 决策                                                                                                                                  |
+| --- | ------------------------------------------------------------------------------------------------------------------------------------- |
+| 1   | 前端 UI = Material Design（MUI）                                                                                                      |
+| 2   | 「已阻塞」保留独立泳道；看板泳道左右滑动即可                                                                                          |
+| 3   | ACP 首批适配 Codex / OpenCode / Pi / Copilot CLI（默认内置条目）                                                                      |
+| 4   | 多节点 = runtime 安装即注册（WS/SSE 出站，免复杂配置）；不做集群；SSH 非必需（v1 不做）                                               |
+| 5   | 审核强制对接 PR/MR；以 git 原生方式实现（推分支 + 链接 + 合并检测），不接平台 API                                                     |
+| 6   | 不做成本预算；改为质量阀（循环抽搐 / 停滞 / 突然中断 / 硬上限熔断）                                                                   |
+| 7   | 进行中评论注入时机 = 排队到当前 turn 结束后注入，时间线标注送达状态                                                                   |
+| 8   | 多用户：工作区内邀请成员，owner / admin / member 三角色                                                                               |
+| 9   | 项目 = git 仓库 + 本地目录；git 凭据 / 配置用户本地自理，不区分 GitHub / GitLab                                                       |
+| 10  | 不实现内置 Agent loop：所有智能体（含助理）直接绑定 CLI + 模型 + 推理强度                                                             |
+| 11  | 移除智能体团队（pipeline / supervisor）；改以「工作流」固化编排：节点绑定智能体与项目、DAG 并行推进、任务即实例，不新增任务状态       |
+| 12  | 工作流节点可绑定不同项目；节点产物以「项目 + 分支 + commit」引用交接，沉淀在 git；跨机由下游 `git fetch` 拉取（无 remote 则只能同机） |
+| 13  | 工作流为 DAG 编排，支持并行节点与声明式跳过条件；不做运行时动态分派（主管模式）                                                       |
 
 ### 8.2 剩余风险
 
@@ -521,16 +542,17 @@ flowchart LR
 
 ## 附录 A：设计演进对照（原始设计 → 当前方案）
 
-| 原设计                                           | 当前方案                                                                                        | 理由                                                                  |
-| ------------------------------------------------ | ----------------------------------------------------------------------------------------------- | --------------------------------------------------------------------- |
-| 泳道：规划\|待办\|工作xN\|审核\|阻塞\|完成\|归档 | 七类语义泳道均独立 + 可定制工作子泳道组（WIP + 角色绑定）；阻塞记录来源状态可回退；看板左右滑动 | 多工作泳道有明确语义（阶段/角色），阻塞恢复不丢上下文，泳道多时不拥挤 |
-| 已归档只显示近七天                               | 显示过滤 ≠ 数据删除；归档永久保留 + 独立检索页                                                  | 审计与返工追溯需要历史                                                |
-| 自动认领（未定义机制）                           | 原子认领 + 租约心跳 + 重试上限 + 能力匹配                                                       | 多节点 / 崩溃场景下不重复认领、不丢任务                               |
-| 评论引导 / 评论返工                              | 按状态细化评论语义表（含阻塞解答、审核驳回、turn 结束注入）                                     | 覆盖原设计未定义的边界状态                                            |
-| 时间线流式输出                                   | 事件溯源 TaskEvent + SSE 序号续传                                                               | 断线不丢消息，历史可回放，团队过程天然可见                            |
-| GitHub / GitLab / 本地项目 + 平台凭据            | git 仓库 + 本地目录；git 用户自理；PR/MR 强制但 git 原生实现（链接 + 合并检测）                 | 砍掉平台 API 集成面，认证交给用户本地 git，审核闭环不打折             |
-| 内置运行时 + ACP 双形态                          | 一切智能体绑定 ACP CLI（Codex/OpenCode/Pi/Copilot）+ 模型 + 推理强度；助理经内置 MCP 操作工作台 | 不重复造 Agent loop，复用成熟 CLI 的模型接入与工具能力                |
-| 多节点（集群式预留）                             | 单控制面 + runtime 安装即注册（出站 WS，配对码 + 一键批准）；状态集中 SQLite                    | 免复杂配置、NAT 友好；无集群复杂度                                    |
-| Token 预算 / 成本控制                            | 移除；质量阀：循环 / 停滞 / 中断 / 硬上限熔断 + 诊断卡片                                        | 用户无预算诉求；失控防护比费用上限更关键                              |
-| 单用户                                           | 多用户：账号 + 工作区邀请 + owner/admin/member 权限矩阵                                         | 团队协作是工作台天然场景                                              |
-| （未提及）                                       | 任务级 git worktree 隔离、密钥库（仅 MCP）、工具审批、已取消扩展态、通知中心                    | 并发安全与 AI 执行安全是工作台落地前提                                |
+| 原设计                                           | 当前方案                                                                                        | 理由                                                                         |
+| ------------------------------------------------ | ----------------------------------------------------------------------------------------------- | ---------------------------------------------------------------------------- |
+| 泳道：规划\|待办\|工作xN\|审核\|阻塞\|完成\|归档 | 七类语义泳道均独立 + 可定制工作子泳道组（WIP + 角色绑定）；阻塞记录来源状态可回退；看板左右滑动 | 多工作泳道有明确语义（阶段/角色），阻塞恢复不丢上下文，泳道多时不拥挤        |
+| 已归档只显示近七天                               | 显示过滤 ≠ 数据删除；归档永久保留 + 独立检索页                                                  | 审计与返工追溯需要历史                                                       |
+| 自动认领（未定义机制）                           | 原子认领 + 租约心跳 + 重试上限 + 能力匹配                                                       | 多节点 / 崩溃场景下不重复认领、不丢任务                                      |
+| 评论引导 / 评论返工                              | 按状态细化评论语义表（含阻塞解答、审核驳回、turn 结束注入）                                     | 覆盖原设计未定义的边界状态                                                   |
+| 时间线流式输出                                   | 事件溯源 TaskEvent + SSE 序号续传                                                               | 断线不丢消息，历史可回放，工作流节点过程天然可见                             |
+| GitHub / GitLab / 本地项目 + 平台凭据            | git 仓库 + 本地目录；git 用户自理；PR/MR 强制但 git 原生实现（链接 + 合并检测）                 | 砍掉平台 API 集成面，认证交给用户本地 git，审核闭环不打折                    |
+| 内置运行时 + ACP 双形态                          | 一切智能体绑定 ACP CLI（Codex/OpenCode/Pi/Copilot）+ 模型 + 推理强度；助理经内置 MCP 操作工作台 | 不重复造 Agent loop，复用成熟 CLI 的模型接入与工具能力                       |
+| 多节点（集群式预留）                             | 单控制面 + runtime 安装即注册（出站 WS，配对码 + 一键批准）；状态集中 SQLite                    | 免复杂配置、NAT 友好；无集群复杂度                                           |
+| Token 预算 / 成本控制                            | 移除；质量阀：循环 / 停滞 / 中断 / 硬上限熔断 + 诊断卡片                                        | 用户无预算诉求；失控防护比费用上限更关键                                     |
+| 单用户                                           | 多用户：账号 + 工作区邀请 + owner/admin/member 权限矩阵                                         | 团队协作是工作台天然场景                                                     |
+| 智能体团队（流水线 / 主管编排）                  | 工作流模板：节点绑定智能体与项目（可跨项目交接产物），任务即流程实例；看板卡片 + 详情节点视图   | 去掉团队这层组织概念、入口更浅；复用现有 Run / 租约 / 质量阀，不新增任务状态 |
+| （未提及）                                       | 任务级 git worktree 隔离、密钥库（仅 MCP）、工具审批、已取消扩展态、通知中心                    | 并发安全与 AI 执行安全是工作台落地前提                                       |

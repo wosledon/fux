@@ -6,7 +6,7 @@
 
 ```powershell
 cargo build            # 产出 fux / fux-runtime / fux-mock-agent / fux-mcp
-cargo test             # 9 个测试；e2e 需要 git 在 PATH，且会真实拉起 mock agent 子进程
+cargo test             # 12 个测试（6 单元 + 6 集成）；e2e 需要 git 在 PATH，且会真实拉起 mock agent 子进程
 cargo test --test api e2e_mock_agent_delivery -- --nocapture   # 只跑一个集成测试
 cargo test --lib transition_table                              # 只跑 lib 单测
 cd frontend; npm run build    # tsc 双检 + vite build（无 lint 脚本，类型检查是唯一门禁）
@@ -17,9 +17,17 @@ cd frontend; npm run dev      # http://127.0.0.1:5173，/api 代理到 8080
 
 ## 架构速览
 
-- **后端** Rust（Actix-web + SQLx/SQLite）：`src/main.rs` 控制面入口；`src/server/` 下 `api/`（HTTP 端点）、`domain.rs`（任务状态机）、`events.rs`（事件溯源 + 广播）、`scheduler.rs`（认领/租约/分发）、`watchdog.rs`（质量阀）、`nodes_ws.rs` + `src/proto.rs`（节点通道）、`runner.rs` + `src/acp.rs`（本地执行 / ACP client）。
+- **后端** Rust（Actix-web + SQLx/SQLite）：`src/main.rs` 控制面入口；`src/server/` 下 `api/`（HTTP 端点）、`domain.rs`（任务状态机）、`events.rs`（事件溯源 + 广播）、`scheduler.rs`（认领/租约/分发）、`watchdog.rs`（质量阀）、`workflow.rs`（工作流 DAG 引擎）、`gitflow.rs`（交付/合并检测）、`nodes_ws.rs` + `src/proto.rs`（节点通道）、`runner.rs` + `src/acp.rs`（本地执行 / ACP client）。
 - **前端** React 19 + TypeScript + MUI + TanStack Query + dnd-kit，`frontend/src/pages/` 一页一文件，`api.ts` 集中放请求与手写类型。
 - Fux 是 ACP **client**（NDJSON JSON-RPC over stdio）。不自建 agent loop、不接 Git 平台 API、不做集群。
+
+## 设计方向（v0.4）
+
+- 「智能体团队」（`agent_teams` / `team_members` / pipeline / supervisor）**已从产品设计中移除，代码已清理**（`0002_drop_teams.sql`）。
+- 替代方案是「工作流」：`workflows` 模板 = 节点 DAG（节点 = 名称 + 智能体 + **执行项目** + 追加提示词 + `dependsOn`），节点可跨项目、依赖满足即并行；产物以「项目 + 分支 + commit」沉淀在 git（分支 `fux/task-<id>/<nodeKey>`），跨机靠下游 `git fetch`。节点推进复用 Run/租约/质量阀，**不新增任务状态**。
+- 交付物不再只有一条 PR：一个任务多条 `deliveries`（每个项目一条），全部合并才可批准审核。
+- 展示形态：流程实例就是看板上的普通任务卡（角标显示节点进度），详情里有「流程」页签；工作流页负责模板定义与一句话发起。
+- 不要再往 teams / 团队面板方向扩展；新增编排类需求一律落在工作流上。
 
 ## 全局不变量
 

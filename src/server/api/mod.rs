@@ -13,7 +13,7 @@ pub mod skills;
 pub mod sse;
 pub mod task_types;
 pub mod tasks;
-pub mod teams;
+pub mod workflows;
 pub mod workspaces;
 
 pub fn routes(cfg: &mut actix_web::web::ServiceConfig) {
@@ -24,7 +24,7 @@ pub fn routes(cfg: &mut actix_web::web::ServiceConfig) {
         .configure(task_types::routes)
         .configure(tasks::routes)
         .configure(agents::routes)
-        .configure(teams::routes)
+        .configure(workflows::routes)
         .configure(cli_entries::routes)
         .configure(skills::routes)
         .configure(mcp::routes)
@@ -52,7 +52,9 @@ pub fn claims_from_req(
         .split('&')
         .find_map(|kv| kv.strip_prefix("token="))
         .map(|s| urldecode(s));
-    let token = header.or(query_token).ok_or_else(|| ApiError::unauthorized("未登录"))?;
+    let token = header
+        .or(query_token)
+        .ok_or_else(|| ApiError::unauthorized("未登录"))?;
     jsonwebtoken::decode::<crate::server::auth::Claims>(
         &token,
         &jsonwebtoken::DecodingKey::from_secret(secret.as_bytes()),

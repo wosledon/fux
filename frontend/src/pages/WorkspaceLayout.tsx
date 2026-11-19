@@ -9,7 +9,7 @@ import InboxIcon from '@mui/icons-material/Inbox'
 import FolderIcon from '@mui/icons-material/Folder'
 import CategoryIcon from '@mui/icons-material/Category'
 import PsychologyIcon from '@mui/icons-material/Psychology'
-import GroupsIcon from '@mui/icons-material/Groups'
+import AccountTreeIcon from '@mui/icons-material/AccountTree'
 import TerminalIcon from '@mui/icons-material/Terminal'
 import SchoolIcon from '@mui/icons-material/School'
 import HubIcon from '@mui/icons-material/Hub'
@@ -35,7 +35,7 @@ const NAV_GROUPS = [
   {
     label: '智能体', items: [
       { to: 'agents', label: '智能体', icon: <PsychologyIcon /> },
-      { to: 'teams', label: '团队', icon: <GroupsIcon /> },
+      { to: 'workflows', label: '工作流', icon: <AccountTreeIcon /> },
       { to: 'clis', label: 'CLI 接入', icon: <TerminalIcon /> },
       { to: 'skills', label: 'SKILL', icon: <SchoolIcon /> },
       { to: 'mcp', label: 'MCP', icon: <HubIcon /> },

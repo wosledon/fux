@@ -21,6 +21,19 @@ pub struct ProjectSpec {
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
+pub struct UpstreamSpec {
+    /// 上游节点 key
+    pub key: String,
+    /// 项目名（展示用）
+    pub name: String,
+    /// 可 clone 的地址（remote URL 或本地路径）
+    pub remote: String,
+    pub branch: String,
+    pub sha: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
 pub struct RunSpec {
     pub run_id: String,
     pub task_id: String,
@@ -43,6 +56,17 @@ pub struct RunSpec {
     /// 远程节点据此自行检出仓库/准备 worktree
     pub project: Option<ProjectSpec>,
     pub branch: String,
+    /// 分支起点（工作流：同项目上游分支）；None 用项目默认分支
+    #[serde(default)]
+    pub base_branch: Option<String>,
+    /// 工作流：当前节点 key / 名称（非工作流为空）
+    #[serde(default)]
+    pub stage_key: String,
+    #[serde(default)]
+    pub stage_name: String,
+    /// 需要检出到 .fux/upstream/<key> 的上游产物
+    #[serde(default)]
+    pub upstream: Vec<UpstreamSpec>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]

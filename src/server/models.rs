@@ -109,7 +109,7 @@ pub struct Task {
     pub priority: i64,
     pub tags: String,
     pub assignee_agent_id: Option<String>,
-    pub assignee_team_id: Option<String>,
+    pub workflow_id: Option<String>,
     pub branch: Option<String>,
     pub pr_url: Option<String>,
     pub pr_state: Option<String>,
@@ -121,6 +121,13 @@ pub struct Task {
     pub created_by: Option<String>,
     pub created_at: String,
     pub updated_at: String,
+    /// 派生字段（仅任务列表/详情填充，不落库）
+    #[sqlx(default)]
+    pub workflow_name: Option<String>,
+    #[sqlx(default)]
+    pub stage_total: Option<i64>,
+    #[sqlx(default)]
+    pub stage_done: Option<i64>,
 }
 
 #[derive(Debug, Clone, FromRow, Serialize)]
@@ -168,20 +175,28 @@ pub struct Agent {
 
 #[derive(Debug, Clone, FromRow, Serialize)]
 #[serde(rename_all = "camelCase")]
-pub struct Team {
+pub struct Workflow {
     pub id: String,
     pub workspace_id: String,
     pub name: String,
-    pub mode: String,
+    pub description: String,
+    pub stages: String,
+    pub created_at: String,
+    pub updated_at: String,
 }
 
 #[derive(Debug, Clone, FromRow, Serialize)]
 #[serde(rename_all = "camelCase")]
-pub struct TeamMember {
-    pub team_id: String,
-    pub agent_id: String,
-    pub role: String,
-    pub position: i64,
+pub struct Delivery {
+    pub id: String,
+    pub task_id: String,
+    pub project_id: String,
+    pub node_key: String,
+    pub branch: Option<String>,
+    pub pr_url: Option<String>,
+    pub pr_state: Option<String>,
+    pub merge_commit: Option<String>,
+    pub created_at: String,
 }
 
 #[derive(Debug, Clone, FromRow, Serialize)]
@@ -216,9 +231,13 @@ pub struct Run {
     pub id: String,
     pub task_id: String,
     pub agent_id: String,
-    pub team_id: Option<String>,
     pub node_id: String,
     pub stage: i64,
+    pub stage_key: Option<String>,
+    pub project_id: Option<String>,
+    pub branch: Option<String>,
+    pub head_sha: Option<String>,
+    pub lease_expires_at: Option<String>,
     pub retry_count: i64,
     pub retry_of: Option<String>,
     pub acp_session_id: Option<String>,

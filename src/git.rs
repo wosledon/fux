@@ -1,5 +1,5 @@
 //! git 原生工具：Fux 只调用 git CLI，凭据由用户在节点本地自理。
-use anyhow::{anyhow, Context, Result};
+use anyhow::{Context, Result, anyhow};
 use std::path::{Path, PathBuf};
 use tokio::process::Command;
 
@@ -94,7 +94,12 @@ pub async fn prepare_worktree(
     }
     // 清理可能残留的同名分支 worktree 记录
     git(repo_dir, &["worktree", "prune"]).await.ok();
-    let base_ref = if git_ok(repo_dir, &["rev-parse", "--verify", &format!("origin/{base}")]).await {
+    let base_ref = if git_ok(
+        repo_dir,
+        &["rev-parse", "--verify", &format!("origin/{base}")],
+    )
+    .await
+    {
         format!("origin/{base}")
     } else if git_ok(repo_dir, &["rev-parse", "--verify", base]).await {
         base.to_string()
@@ -112,7 +117,9 @@ pub async fn prepare_worktree(
 
 pub async fn remove_worktree(repo_dir: &Path, worktree_dir: &Path) {
     let wt = worktree_dir.to_string_lossy().to_string();
-    git(repo_dir, &["worktree", "remove", "--force", &wt]).await.ok();
+    git(repo_dir, &["worktree", "remove", "--force", &wt])
+        .await
+        .ok();
     git(repo_dir, &["worktree", "prune"]).await.ok();
 }
 
@@ -154,7 +161,10 @@ pub fn pr_create_url(remote: &str, branch: &str, base: &str) -> Option<String> {
     let (host, path) = if let Some(rest) = r.strip_prefix("git@") {
         let mut it = rest.splitn(2, ':');
         (it.next()?.to_string(), it.next()?.to_string())
-    } else if let Some(rest) = r.strip_prefix("https://").or_else(|| r.strip_prefix("http://")) {
+    } else if let Some(rest) = r
+        .strip_prefix("https://")
+        .or_else(|| r.strip_prefix("http://"))
+    {
         let mut it = rest.splitn(2, '/');
         (it.next()?.to_string(), it.next()?.to_string())
     } else if let Some(rest) = r.strip_prefix("ssh://git@") {
@@ -193,7 +203,10 @@ pub fn copy_dir_recursive(src: &Path, dst: &Path) -> std::io::Result<()> {
         let ty = entry.file_type()?;
         let to = dst.join(entry.file_name());
         if ty.is_dir() {
-            if entry.file_name() == ".git" || entry.file_name() == "node_modules" || entry.file_name() == "target" {
+            if entry.file_name() == ".git"
+                || entry.file_name() == "node_modules"
+                || entry.file_name() == "target"
+            {
                 continue;
             }
             copy_dir_recursive(&entry.path(), &to)?;
@@ -212,7 +225,46 @@ pub fn checkout_dir(data_dir: &Path, project_id: &str) -> PathBuf {
 pub fn worktree_dir(data_dir: &Path, task_id: &str) -> PathBuf {
     data_dir.join("worktrees").join(task_id)
 }
+/// 工作流：每个节点一个独立 worktree（同一节点重跑复用，便于续跑与返工）。
+pub fn run_worktree_dir(data_dir: &Path, task_id: &str, run_id: &str) -> PathBuf {
+    data_dir.join("worktrees").join(task_id).join(run_id)
+}
 
+/// 工作流节点 worktree：按 nodeKey 稳定复用（parallel 节点互不冲突）。
+pub fn stage_worktree_dir(data_dir: &Path, task_id: &str, stage_key: &str) -> PathBuf {
+    data_dir
+        .join("worktrees")
+        .join(task_id)
+        .join(format!("node-{stage_key}"))
+}
+
+/// 把上游节点产物检出到 workdir/.fux/upstream/<key>（只读参考）。
+pub async fn materialize_upstreams(
+    workdir: &Path,
+    upstream: &[crate::runner::UpstreamSpec],
+) -> Result<()> {
+    if upstream.is_empty() {
+        return Ok(());
+    }
+    let base = workdir.join(".fux").join("upstream");
+    tokio::fs::create_dir_all(&base).await?;
+    for u in upstream {
+        let dir = base.join(&u.key);
+        if dir.exists() {
+            continue;
+        }
+        if let Err(e) = ensure_clone(&u.remote, &dir).await {
+            tracing::warn!("上游产物检出失败 {}: {e:#}", u.key);
+            continue;
+        }
+        if !u.sha.is_empty() {
+            git(&dir, &["checkout", "--detach", &u.sha]).await.ok();
+        } else if !u.branch.is_empty() {
+            git(&dir, &["checkout", &u.branch]).await.ok();
+        }
+    }
+    Ok(())
+}
 #[cfg(test)]
 mod tests {
     use super::*;
