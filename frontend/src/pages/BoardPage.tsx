@@ -67,7 +67,7 @@ function CardBody({ task, agents, workflows, projects, types }: {
   return (
     <>
       <Box sx={{ display: 'flex', alignItems: 'center', gap: 0.5, mb: 0.6 }}>
-        <Typography variant="caption" color="text.disabled" sx={{ fontFamily: 'monospace', fontSize: 11 }}>#{task.id.slice(0, 6)}</Typography>
+        <Typography variant="caption" color="text.disabled" sx={{ fontFamily: 'monospace', fontSize: 11 }}>#{task.id.slice(0, 8)}</Typography>
         <Box sx={{ flexGrow: 1 }} />
         {type && (
           <Tooltip title={`任务类型：${type.name}`}>
@@ -109,7 +109,7 @@ function CardBody({ task, agents, workflows, projects, types }: {
       )}
 
       {task.status === 'blocked' && task.blockReason && (
-        <Box sx={{ mt: 1.25, px: 1.25, py: 0.75, borderRadius: 1.25, bgcolor: '#fdeef0' }}>
+        <Box sx={{ mt: 1.25, px: 1.25, py: 0.75, borderRadius: 1.25, bgcolor: theme => theme.palette.mode === 'dark' ? 'rgba(220,38,38,0.12)' : '#fef2f2' }}>
           <Typography variant="caption" sx={{
             color: 'error.main', display: '-webkit-box', WebkitLineClamp: 2, WebkitBoxOrient: 'vertical',
             overflow: 'hidden', lineHeight: 1.45,
@@ -117,12 +117,13 @@ function CardBody({ task, agents, workflows, projects, types }: {
         </Box>
       )}
 
-      <Divider sx={{ my: 1, borderColor: '#eef0f4' }} />
-      <Box sx={{ display: 'flex', alignItems: 'center', gap: 0.75, minWidth: 0 }}>
+      <Box sx={{ display: 'flex', alignItems: 'center', gap: 0.75, minWidth: 0, mt: 1.25, pt: 1.25, borderTop: '1px solid', borderColor: 'divider' }}>
         {projectName && (
           <Tooltip title={`项目：${projectName}`}>
-            <Chip size="small" icon={<FolderOutlinedIcon sx={{ fontSize: 12 }} />} label={projectName} variant="outlined"
-              sx={{ maxWidth: 116, '& .MuiChip-label': { overflow: 'hidden', textOverflow: 'ellipsis' } }} />
+            <Box sx={{ display: 'flex', alignItems: 'center', gap: 0.5, minWidth: 0, maxWidth: 130, color: 'text.secondary' }}>
+              <FolderOutlinedIcon sx={{ fontSize: 14, flexShrink: 0 }} />
+              <Typography variant="caption" noWrap>{projectName}</Typography>
+            </Box>
           </Tooltip>
         )}
         <Box sx={{ flexGrow: 1 }} />
@@ -158,54 +159,17 @@ function TaskCardInner({ task, agents, workflows, projects, types, onOpen }: {
   const running = task.status === 'in_progress'
   return (
     <Paper ref={setNodeRef} {...listeners} {...attributes} onClick={() => onOpen(task.id)}
+      onKeyDown={e => e.key === 'Enter' && onOpen(task.id)} role="button" tabIndex={0}
       sx={{
         p: 1.75, mb: 1.25, cursor: 'grab', opacity: isDragging ? 0.35 : 1,
-        bgcolor: '#ffffff', borderRadius: 1.5, boxShadow: '0 1px 3px rgba(29,36,58,0.07)',
-        transition: 'transform .16s, box-shadow .16s',
-        ...(running ? {
-          position: 'relative',
-          border: '1px solid #f0eeff',
-          boxShadow: 'inset 0 0 0 1px rgba(236,233,255,0.9), 0 4px 18px rgba(99,91,255,0.15)',
-        } : {}),
-        '&:hover': { transform: 'translateY(-2px)', boxShadow: '0 8px 20px rgba(29,36,58,0.1)' },
+        bgcolor: 'background.paper', border: '1px solid', borderColor: running ? 'primary.light' : 'divider', borderRadius: 2,
+        boxShadow: running ? theme => `inset 3px 0 0 ${theme.palette.primary.main}` : 'none',
+        transition: 'transform .16s, border-color .16s, box-shadow .16s',
+        '&:hover': { transform: 'translateY(-1px)', borderColor: running ? 'primary.main' : '#aab4c3', boxShadow: '0 5px 16px rgba(24,34,48,0.07)' },
+        '&:focus-visible': { outline: '2px solid', outlineColor: 'primary.main', outlineOffset: 2 },
         '&:active': { cursor: 'grabbing' },
       }}>
-      {running && (
-        <>
-          <Box aria-hidden sx={{
-            position: 'absolute', inset: -2, borderRadius: 'inherit', padding: '3px',
-            pointerEvents: 'none', overflow: 'hidden', zIndex: 0, opacity: 0.75, filter: 'blur(5px)',
-            mask: 'linear-gradient(#000 0 0) content-box, linear-gradient(#000 0 0)',
-            maskComposite: 'exclude',
-            WebkitMask: 'linear-gradient(#000 0 0) content-box, linear-gradient(#000 0 0)',
-            WebkitMaskComposite: 'xor',
-            '&::before': {
-              content: '""', position: 'absolute', left: '-50%', top: '-50%', width: '200%', height: '200%',
-              background: 'conic-gradient(from 0deg, transparent 0deg 170deg, rgba(99,91,255,0.45) 240deg, #9487ff 295deg, rgba(99,91,255,0) 345deg)',
-              animation: 'fuxSpin 7s linear infinite reverse',
-              willChange: 'transform',
-            },
-          }} />
-          <Box aria-hidden sx={{
-            position: 'absolute', inset: 0, borderRadius: 'inherit', padding: '2px',
-            pointerEvents: 'none', overflow: 'hidden', zIndex: 1,
-            filter: 'drop-shadow(0 0 3px rgba(99,91,255,0.55)) saturate(1.15)',
-            mask: 'linear-gradient(#000 0 0) content-box, linear-gradient(#000 0 0)',
-            maskComposite: 'exclude',
-            WebkitMask: 'linear-gradient(#000 0 0) content-box, linear-gradient(#000 0 0)',
-            WebkitMaskComposite: 'xor',
-            '&::before': {
-              content: '""', position: 'absolute', left: '-50%', top: '-50%', width: '200%', height: '200%',
-              background: 'conic-gradient(from 0deg, transparent 0deg 205deg, rgba(99,91,255,0.35) 235deg, #635bff 275deg, #b3a6ff 305deg, #ffffff 318deg, transparent 335deg)',
-              animation: 'fuxSpin 2.6s linear infinite',
-              willChange: 'transform',
-            },
-          }} />
-        </>
-      )}
-      <Box sx={{ position: 'relative', zIndex: 2 }}>
-        <CardBody task={task} agents={agents} workflows={workflows} projects={projects} types={types} />
-      </Box>
+      <CardBody task={task} agents={agents} workflows={workflows} projects={projects} types={types} />
     </Paper>
   )
 }
@@ -222,19 +186,20 @@ function LaneColumnInner({ lane, tasks, agents, workflows, projects, types, onOp
   const overLimit = lane.wipLimit != null && tasks.length > lane.wipLimit
   return (
     <Box ref={setNodeRef} sx={{
-      width: 304, minWidth: 304, display: 'flex', flexDirection: 'column', height: '100%',
-      bgcolor: '#eef0f5', borderRadius: 1.5, border: '2px solid',
+      width: 300, minWidth: 300, display: 'flex', flexDirection: 'column', height: '100%',
+      bgcolor: theme => theme.palette.mode === 'dark' ? 'rgba(255,255,255,0.025)' : '#f0f2f5',
+      borderRadius: 2, border: '1px solid',
       borderColor: dropState === 'ok' ? 'success.main' : dropState === 'bad' ? 'error.main' : 'transparent',
       transition: 'border-color .15s, background-color .15s', overflow: 'hidden',
     }}>
-      <Box sx={{ px: 1.75, py: 1.5, display: 'flex', alignItems: 'center', gap: 1 }}>
-        <Box sx={{ width: 8, height: 8, borderRadius: '50%', bgcolor: accent, flexShrink: 0 }} />
+      <Box sx={{ px: 1.75, py: 1.25, display: 'flex', alignItems: 'center', gap: 1 }}>
+        <Box sx={{ width: 7, height: 7, borderRadius: '50%', bgcolor: accent, flexShrink: 0 }} />
         <Typography variant="subtitle2" sx={{ flexGrow: 1 }}>{lane.name}</Typography>
         {lane.stageRole && <Tooltip title={`阶段角色：${lane.stageRole}`}><Chip size="small" label={lane.stageRole} variant="outlined" /></Tooltip>}
         {lane.wipLimit != null && (
           <Tooltip title={`WIP 上限 ${lane.wipLimit}`}><Chip size="small" label={`${tasks.length}/${lane.wipLimit}`} color={overLimit ? 'error' : 'default'} variant="outlined" /></Tooltip>
         )}
-        <Chip size="small" label={tasks.length} sx={{ bgcolor: `${accent}22`, color: accent, fontWeight: 700 }} />
+        <Typography variant="caption" sx={{ minWidth: 24, py: 0.25, textAlign: 'center', borderRadius: 1, color: 'text.secondary', bgcolor: 'action.hover', fontWeight: 650 }}>{tasks.length}</Typography>
         {['planning', 'ready'].includes(lane.kind) && (
           <Tooltip title="在此新建任务"><IconButton size="small" onClick={onCreate}><AddIcon fontSize="small" /></IconButton></Tooltip>
         )}
@@ -298,7 +263,7 @@ function BoardScroller({ children, contentKey }: { children: ReactNode; contentK
 
   return (
     <Box sx={{ position: 'relative', display: 'flex', flexGrow: 1, minHeight: 0 }}>
-      <Box ref={ref} sx={{ display: 'flex', gap: 2, px: { xs: 2, md: 3.5 }, pb: 3.5, overflowX: 'auto', flexGrow: 1, minHeight: 0 }}>
+      <Box ref={ref} sx={{ display: 'flex', gap: 2, px: { xs: 2, md: 3 }, pt: 2.5, pb: 3, overflowX: 'auto', flexGrow: 1, minHeight: 0 }}>
         {children}
       </Box>
       {state.left && (
@@ -388,16 +353,16 @@ export default function BoardPage() {
 
   return (
     <Box sx={{ height: '100%', display: 'flex', flexDirection: 'column' }}>
-      <Box sx={{ px: { xs: 2, md: 3.5 }, pt: 3.5, pb: 2.5, flexShrink: 0 }}>
+      <Box sx={{ px: { xs: 2, md: 3 }, pt: 3, flexShrink: 0, bgcolor: 'background.paper', borderBottom: '1px solid', borderColor: 'divider' }}>
         <Box sx={{ display: 'flex', alignItems: 'flex-start', gap: 2, mb: 2.5 }}>
-          <Box sx={{ flexGrow: 1 }}>
+          <Box sx={{ flexGrow: 1, minWidth: 0 }}>
             <Typography variant="h5">工作看板</Typography>
-            <Typography variant="body2" color="text.secondary" sx={{ mt: 0.75 }}>跟随任务从规划到交付，让每一步进展都清晰可见</Typography>
+            <Typography variant="body2" color="text.secondary" sx={{ mt: 0.75 }}>规划、执行、审核与交付，一屏掌握团队进展</Typography>
           </Box>
-          <Button variant="contained" startIcon={<AddIcon />} onClick={() => setCreateOpen(true)}>新建任务</Button>
+          <Button variant="contained" startIcon={<AddIcon />} onClick={() => setCreateOpen(true)} sx={{ flexShrink: 0 }}>新建任务</Button>
         </Box>
-        <Box sx={{ display: 'flex', gap: 1.5, alignItems: 'center', flexWrap: 'wrap' }}>
-          <Box sx={{ display: 'flex', alignItems: 'center', gap: 2.75, px: 0.5 }}>
+        <Box sx={{ display: 'flex', gap: 2, alignItems: 'center', flexWrap: 'wrap', py: 2, borderTop: '1px solid', borderColor: 'divider' }}>
+          <Box sx={{ display: 'flex', alignItems: 'center', gap: { xs: 2, md: 3 }, width: { xs: '100%', lg: 'auto' }, flexWrap: 'wrap' }}>
             {[
               { label: '全部任务', value: tasks.length, color: '#697386' },
               { label: '进行中', value: stats.doing, color: '#635bff' },
@@ -412,12 +377,14 @@ export default function BoardPage() {
             ))}
           </Box>
           <Box sx={{ flexGrow: 1 }} />
-          <TextField select size="small" label="项目" value={filterProject} onChange={e => setFilterProject(e.target.value)} sx={{ width: 160 }}>
-            <MenuItem value="">全部项目</MenuItem>
-            {projects.map(p => <MenuItem key={p.id} value={p.id}>{p.name}</MenuItem>)}
-          </TextField>
-          <TextField size="small" placeholder="搜索任务…" value={search} onChange={e => setSearch(e.target.value)} sx={{ width: 220 }}
-            InputProps={{ startAdornment: <InputAdornment position="start"><SearchIcon fontSize="small" /></InputAdornment> }} />
+          <Box sx={{ display: 'flex', gap: 1, width: { xs: '100%', sm: 'auto' } }}>
+            <TextField select size="small" label="项目" value={filterProject} onChange={e => setFilterProject(e.target.value)} sx={{ width: { xs: '42%', sm: 160 } }}>
+              <MenuItem value="">全部项目</MenuItem>
+              {projects.map(p => <MenuItem key={p.id} value={p.id}>{p.name}</MenuItem>)}
+            </TextField>
+            <TextField size="small" placeholder="搜索任务…" value={search} onChange={e => setSearch(e.target.value)} sx={{ width: { xs: '58%', sm: 220 } }}
+              slotProps={{ input: { startAdornment: <InputAdornment position="start"><SearchIcon fontSize="small" /></InputAdornment> } }} />
+          </Box>
         </Box>
       </Box>
       <DndContext sensors={sensors} onDragStart={onDragStart} onDragOver={onDragOver} onDragEnd={onDragEnd} onDragCancel={() => { setActiveTask(null); setHoverLane(null) }}>
@@ -453,12 +420,12 @@ const scrollButtonSx = (side: 'left' | 'right') => ({
   zIndex: 3,
   width: 36,
   height: 36,
-  bgcolor: 'rgba(255,255,255,0.96)',
+  bgcolor: 'background.paper',
   border: '1px solid',
   borderColor: 'divider',
-  boxShadow: '0 6px 18px rgba(29,36,58,0.16)',
+  boxShadow: '0 6px 18px rgba(24,34,48,0.16)',
   color: 'text.secondary',
-  '&:hover': { bgcolor: '#fff', color: 'primary.main' },
+  '&:hover': { bgcolor: 'background.paper', color: 'primary.main' },
 })
 
 function renderTemplate(tpl: string, vars: Record<string, string>): string {

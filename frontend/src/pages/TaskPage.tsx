@@ -31,6 +31,7 @@ import { get, post, taskEventsUrl, parseJson, STATUS_LABEL, STAGE_LABEL, STAGE_C
 import type { WsCtx } from './WorkspaceLayout'
 import { EmptyState, PersonAvatar, StatusChip, Markdown, ToolRow, toolDetail, useToast, type ToolCallView } from '../ui'
 import WorkflowCanvas, { autoLayout, NODE_H_STATUS } from './WorkflowCanvas'
+import { alpha, useTheme } from '@mui/material/styles'
 
 const fmtEventTime = (s?: string) => s ? `${s.slice(5, 10)} ${s.slice(11, 19)}` : ''
 
@@ -216,26 +217,28 @@ export default function TaskPage() {
 
   return (
     <Box sx={{ height: '100%', display: 'flex', flexDirection: 'column', overflow: 'hidden' }}>
-      <Box sx={{ px: { xs: 2, md: 3.5 }, pt: 3, pb: 2.5, flexShrink: 0, bgcolor: 'background.default', borderBottom: '1px solid', borderColor: 'divider' }}>
-        <Box sx={{ maxWidth: 1500, mx: 'auto' }}>
-          <Box sx={{ display: 'flex', alignItems: 'center', gap: 1, mb: 2 }}>
+      <Box sx={{ px: { xs: 2, md: 3 }, pt: 2.5, pb: 2.5, flexShrink: 0, bgcolor: 'background.paper', borderBottom: '1px solid', borderColor: 'divider' }}>
+        <Box sx={{ maxWidth: 1440, mx: 'auto' }}>
+          <Box sx={{ display: 'flex', alignItems: 'center', gap: 1, mb: 1.5 }}>
             <Tooltip title="返回上一页"><IconButton size="small" onClick={() => nav(-1)} sx={{ ml: -0.75 }}><ArrowBackIcon /></IconButton></Tooltip>
             <Typography variant="body2" color="text.secondary">任务详情</Typography>
-            <Typography variant="body2" color="text.secondary">/</Typography>
+            <Typography variant="body2" color="text.disabled">/</Typography>
             <Typography variant="body2" color="text.secondary" sx={{ fontFamily: 'monospace' }}>#{task.id.slice(0, 8)}</Typography>
             <Box sx={{ flexGrow: 1 }} />
             <Tooltip title="刷新任务"><IconButton size="small" onClick={refresh}><RefreshIcon /></IconButton></Tooltip>
           </Box>
           <Box sx={{ display: 'flex', gap: 2, alignItems: 'flex-start', flexWrap: 'wrap' }}>
             <Box sx={{ flexGrow: 1, minWidth: 260 }}>
-              <Box sx={{ display: 'flex', gap: 0.75, mb: 1.25, flexWrap: 'wrap', alignItems: 'center' }}>
+              <Box sx={{ display: 'flex', gap: 1.25, flexWrap: 'wrap', alignItems: 'center' }}>
+                <Typography variant="h5" sx={{ wordBreak: 'break-word', fontSize: { xs: 22, md: 25 } }}>{task.title}</Typography>
                 <StatusChip status={task.status} />
+              </Box>
+              <Box sx={{ display: 'flex', gap: 0.75, mt: 1.25, flexWrap: 'wrap', alignItems: 'center' }}>
+                <Typography variant="caption" color="text.secondary" sx={{ mr: 0.5 }}>创建于 {task.createdAt?.replace('T', ' ').slice(0, 16)}</Typography>
                 {task.prState && <Chip size="small" variant="outlined" color={task.prState === 'merged' ? 'success' : 'default'} label={`PR: ${task.prState}`} />}
                 {task.branch && <Chip size="small" variant="outlined" label={task.branch} />}
                 {task.retryCount > 0 && <Chip size="small" variant="outlined" label={`重试 ${task.retryCount}`} />}
               </Box>
-              <Typography variant="h5" sx={{ wordBreak: 'break-word', lineHeight: 1.35 }}>{task.title}</Typography>
-              <Typography variant="caption" color="text.secondary" display="block" sx={{ mt: 1 }}>创建于 {task.createdAt?.replace('T', ' ').slice(0, 16)} · 最近更新 {task.updatedAt?.replace('T', ' ').slice(0, 16)}</Typography>
             </Box>
             <Box sx={{ display: 'flex', gap: 1, flexWrap: 'wrap', alignItems: 'center', pt: 0.5 }}>
               {task.status === 'planning' && <Button variant="contained" onClick={() => action(() => post(`/tasks/${taskId}/transition`, { to: 'ready' }), '已移入待办，等待智能体认领')}>规划完成 → 待办</Button>}
@@ -252,15 +255,15 @@ export default function TaskPage() {
         </Box>
       </Box>
 
-      <Box ref={pageScrollRef} sx={{ flexGrow: 1, minHeight: 0, overflowY: 'auto', px: { xs: 2, md: 3.5 }, pb: 3.5 }}>
+      <Box ref={pageScrollRef} sx={{ flexGrow: 1, minHeight: 0, overflowY: 'auto', px: { xs: 2, md: 3 }, pb: 3 }}>
         <Box sx={{
-          maxWidth: 1500, mx: 'auto', mt: 2, display: 'grid', gap: 2.5,
-          gridTemplateColumns: { xs: 'minmax(0,1fr)', lg: 'minmax(0,1fr) 340px' }, alignItems: 'start',
+          maxWidth: 1440, mx: 'auto', mt: 2.5, display: 'grid', gap: 2.5,
+          gridTemplateColumns: { xs: 'minmax(0,1fr)', lg: 'minmax(0,1fr) 320px' }, alignItems: 'start',
         }}>
-          <Paper sx={{ minHeight: 560, display: 'flex', flexDirection: 'column', borderRadius: 1.25, boxShadow: '0 1px 4px rgba(29,36,58,0.05)' }}>
+          <Paper sx={{ minHeight: 560, display: 'flex', flexDirection: 'column', border: '1px solid', borderColor: 'divider', borderRadius: 2, overflow: 'hidden' }}>
             <Tabs value={tab} onChange={(_, v) => setTab(v)} sx={{
               position: 'sticky', top: 0, zIndex: 3, px: 2, borderBottom: '1px solid', borderColor: 'divider',
-              bgcolor: '#fafbfc', flexShrink: 0, borderTopLeftRadius: 'inherit', borderTopRightRadius: 'inherit',
+              bgcolor: 'background.paper', flexShrink: 0, borderTopLeftRadius: 'inherit', borderTopRightRadius: 'inherit',
             }}>
               <Tab label={`时间轴 ${timeline.length}`} /><Tab label="任务说明" />{task.workflowId && <Tab label="流程" />}
             </Tabs>
@@ -280,7 +283,7 @@ export default function TaskPage() {
             </Box>
             {timeline.length === 0 && <EmptyState title="还没有任务动态" desc="智能体输出、工具调用、评论和状态变化会实时出现在这里。" />}
             {timeline.length > 0 && (
-              <Box sx={{ position: 'relative', '&::before': { content: '""', position: 'absolute', left: 13, top: 12, bottom: 24, width: 2, borderRadius: 1, bgcolor: '#e6e8ef' } }}>
+              <Box sx={{ position: 'relative', '&::before': { content: '""', position: 'absolute', left: 13, top: 12, bottom: 24, width: 2, borderRadius: 1, bgcolor: 'divider' } }}>
                 {timeline.map((entry, i) => {
                   if (entry.type === 'run') {
                     return <RunTimelineGroup key={entry.runId} entry={entry} run={(data?.runs || []).find(r => r.id === entry.runId)} signal={expandSignal} />
@@ -292,7 +295,7 @@ export default function TaskPage() {
                 case 'agent.message':
                   return (
                     <TimelineRow key={i} icon={<SmartToyIcon sx={{ fontSize: 15 }} />} tone="primary" title="智能体输出" time={time}>
-                      <Paper elevation={0} sx={{ p: 1.5, bgcolor: '#f5f6fa', borderRadius: 1.25, whiteSpace: 'pre-wrap', wordBreak: 'break-word' }}>
+                      <Paper elevation={0} sx={{ p: 1.5, bgcolor: 'action.hover', borderRadius: 1.5, whiteSpace: 'pre-wrap', wordBreak: 'break-word' }}>
                         <Typography variant="body2" sx={{ lineHeight: 1.75 }}>{it.text}</Typography>
                       </Paper>
                     </TimelineRow>
@@ -307,7 +310,7 @@ export default function TaskPage() {
                   return (
                     <TimelineRow key={i} node={<PersonAvatar name={env?.payload?.username || 'U'} size={26} />}
                       title={`${env?.payload?.username || env?.actor || '成员'} 的评论`} time={time}>
-                      <Paper elevation={0} sx={{ p: 1.5, bgcolor: '#eceaff', borderRadius: 1.25, whiteSpace: 'pre-wrap', wordBreak: 'break-word' }}>
+                      <Paper elevation={0} sx={{ p: 1.5, bgcolor: 'action.selected', borderRadius: 1.5, whiteSpace: 'pre-wrap', wordBreak: 'break-word' }}>
                         <Typography variant="body2">{env?.payload?.text}</Typography>
                       </Paper>
                     </TimelineRow>
@@ -469,7 +472,7 @@ export default function TaskPage() {
             )}
             <div ref={bottomRef} />
           </Box>
-          <Box sx={{ p: 2, borderTop: '1px solid', borderColor: 'divider', bgcolor: '#fafbfc', flexShrink: 0 }}>
+          <Box sx={{ p: 2, borderTop: '1px solid', borderColor: 'divider', bgcolor: 'background.paper', flexShrink: 0 }}>
             <Typography variant="caption" color="text.secondary" display="block" sx={{ mb: 1 }}>{commentHint}</Typography>
             <Box sx={{ display: 'flex', gap: 1, alignItems: 'flex-end' }}>
               <TextField fullWidth multiline maxRows={4} placeholder="输入评论，引导智能体或记录评审意见…" value={comment} onChange={e => setComment(e.target.value)}
@@ -507,11 +510,11 @@ export default function TaskPage() {
           <Box component="aside" sx={{
             display: 'flex', flexDirection: 'column', gap: 2, pb: 0.5,
             position: { xs: 'static', lg: 'sticky' }, top: { lg: 16 }, alignSelf: 'start',
-            maxHeight: { lg: 'calc(100vh - 32px)' }, overflowY: { xs: 'visible', lg: 'auto' },
+            maxHeight: { lg: 'calc(100vh - 220px)' }, overflowY: { xs: 'visible', lg: 'auto' },
           }}>
-            <Paper elevation={0} sx={{ p: 2.25, bgcolor: 'background.paper', borderRadius: 1.25, flexShrink: 0, boxShadow: '0 1px 4px rgba(29,36,58,0.05)' }}>
+            <Paper elevation={0} sx={{ p: 2.25, bgcolor: 'background.paper', border: '1px solid', borderColor: 'divider', borderRadius: 2, flexShrink: 0 }}>
               <Box sx={{ display: 'flex', alignItems: 'center', gap: 1, mb: 2 }}>
-                <RateReviewIcon sx={{ fontSize: 19, color: 'secondary.main' }} />
+                <RateReviewIcon sx={{ fontSize: 19, color: 'primary.main' }} />
                 <Typography variant="subtitle2" sx={{ flexGrow: 1 }}>交付审核</Typography>
                 <Chip size="small" label={task.prState || '未交付'} color={task.prState === 'merged' ? 'success' : 'default'} variant={task.prState === 'merged' ? 'filled' : 'outlined'} />
               </Box>
@@ -550,7 +553,7 @@ export default function TaskPage() {
               )}
             </Paper>
 
-            <Paper elevation={0} sx={{ p: 2.25, bgcolor: 'background.paper', borderRadius: 1.25, flexShrink: 0, boxShadow: '0 1px 4px rgba(29,36,58,0.05)' }}>
+            <Paper elevation={0} sx={{ p: 2.25, bgcolor: 'background.paper', border: '1px solid', borderColor: 'divider', borderRadius: 2, flexShrink: 0 }}>
               <Typography variant="subtitle2" gutterBottom sx={{ mb: 2 }}>任务信息</Typography>
               <Box sx={{ display: 'grid', gap: 1.25 }}>
                 <MetaRow k="项目" v={data?.project?.name || '—'} />
@@ -561,7 +564,7 @@ export default function TaskPage() {
               </Box>
             </Paper>
 
-            <Paper elevation={0} sx={{ p: 2.25, bgcolor: 'background.paper', borderRadius: 1.25, flexShrink: 0, boxShadow: '0 1px 4px rgba(29,36,58,0.05)' }}>
+            <Paper elevation={0} sx={{ p: 2.25, bgcolor: 'background.paper', border: '1px solid', borderColor: 'divider', borderRadius: 2, flexShrink: 0 }}>
               <Typography variant="subtitle2" gutterBottom sx={{ mb: 1.5 }}>运行记录（{data?.runs.length || 0}）</Typography>
               {(data?.runs || []).map(r => (
                 <Box key={r.id} sx={{ py: 1.25, borderBottom: '1px solid', borderColor: 'divider', '&:last-child': { borderBottom: 0, pb: 0 } }}>
@@ -597,27 +600,31 @@ export default function TaskPage() {
   )
 }
 
-const TIMELINE_TONE = {
-  default: { color: '#697386', bg: '#f1f2f6' },
-  primary: { color: '#635bff', bg: '#eceaff' },
-  success: { color: '#16a34a', bg: '#e9f8ef' },
-  warning: { color: '#b45309', bg: '#fff6e6' },
-  error: { color: '#d85160', bg: '#fdeef0' },
-  muted: { color: '#8b93a7', bg: '#f4f5f8' },
-} as const
+type TimelineTone = 'default' | 'primary' | 'success' | 'warning' | 'error' | 'muted'
+
+function useTimelineTone(tone: TimelineTone) {
+  const theme = useTheme()
+  const color = tone === 'primary' ? theme.palette.primary.main
+    : tone === 'success' ? theme.palette.success.main
+    : tone === 'warning' ? theme.palette.warning.main
+    : tone === 'error' ? theme.palette.error.main
+    : theme.palette.text.secondary
+  return { color, bg: alpha(color, theme.palette.mode === 'dark' ? 0.16 : 0.09) }
+}
 
 function TimelineRow({ icon, node, tone = 'default', title, time, children }: {
-  icon?: React.ReactNode; node?: React.ReactNode; tone?: keyof typeof TIMELINE_TONE
+  icon?: React.ReactNode; node?: React.ReactNode; tone?: TimelineTone
   title: string; time?: string; children?: React.ReactNode
 }) {
-  const t = TIMELINE_TONE[tone]
+  const t = useTimelineTone(tone)
   return (
     <Box sx={{ position: 'relative', display: 'flex', gap: 1.5, pb: 1.5 }}>
       <Box sx={{ position: 'relative', zIndex: 1, width: 28, flexShrink: 0, display: 'flex', justifyContent: 'center', pt: 0.25 }}>
         {node || (
           <Box sx={{
             width: 26, height: 26, borderRadius: '50%', bgcolor: t.bg, color: t.color,
-            display: 'grid', placeItems: 'center', border: '2px solid #fff', boxShadow: '0 0 0 1px #e6e8ef',
+            display: 'grid', placeItems: 'center', border: '2px solid', borderColor: 'background.paper',
+            boxShadow: theme => `0 0 0 1px ${theme.palette.divider}`,
           }}>{icon}</Box>
         )}
       </Box>
@@ -632,7 +639,7 @@ function TimelineRow({ icon, node, tone = 'default', title, time, children }: {
   )
 }
 
-const RUN_STATUS_META: Record<string, { label: string; tone: keyof typeof TIMELINE_TONE }> = {
+const RUN_STATUS_META: Record<string, { label: string; tone: TimelineTone }> = {
   running: { label: '执行中', tone: 'primary' },
   finished: { label: '完成', tone: 'success' },
   cancelled: { label: '已取消', tone: 'error' },
@@ -643,7 +650,7 @@ const RUN_STATUS_META: Record<string, { label: string; tone: keyof typeof TIMELI
 function RunTimelineGroup({ entry, run, signal }: { entry: RunEntry; run?: Run; signal: ExpandSignal }) {
   const live = run?.status === 'running'
   const meta = (run && RUN_STATUS_META[run.status]) || { label: '已结束', tone: 'muted' as const }
-  const t = TIMELINE_TONE[meta.tone]
+  const t = useTimelineTone(meta.tone)
 
   const startAt = entry.start?.createdAt || entry.at
   const lastAt = entry.items.length > 0 ? entry.items[entry.items.length - 1].at : entry.at
@@ -673,7 +680,8 @@ function RunTimelineGroup({ entry, run, signal }: { entry: RunEntry; run?: Run; 
         <Box sx={{ position: 'relative', zIndex: 1, width: 28, flexShrink: 0, display: 'flex', justifyContent: 'center', pt: 0.25 }}>
           <Box sx={{
             width: 26, height: 26, borderRadius: '50%', bgcolor: t.bg, color: t.color,
-            display: 'grid', placeItems: 'center', border: '2px solid #fff', boxShadow: '0 0 0 1px #e6e8ef',
+            display: 'grid', placeItems: 'center', border: '2px solid', borderColor: 'background.paper',
+            boxShadow: theme => `0 0 0 1px ${theme.palette.divider}`,
           }}>{icon}</Box>
         </Box>
         <Box sx={{ flexGrow: 1, minWidth: 0, pt: 0.25 }}>
@@ -823,7 +831,7 @@ function RunOutputBlock({ text, live }: { text: string; live: boolean }) {
         <Typography variant="caption" fontWeight={650}>智能体输出</Typography>
         {live && <CircularProgress size={9} />}
       </Box>
-      <Paper elevation={0} sx={{ p: 1.5, bgcolor: '#f5f6fa', borderRadius: 1.25 }}>
+      <Paper elevation={0} sx={{ p: 1.5, bgcolor: 'action.hover', borderRadius: 1.5 }}>
         <Markdown text={text} />
       </Paper>
     </Box>
@@ -884,23 +892,23 @@ function WorkflowStatusPanel({ workflow, runs, projects, agents, taskStatus, onD
   const contentBottom = Math.max(0, ...stages.map(s => (s.y ?? 0) + NODE_H_STATUS))
   const canvasHeight = Math.min(440, Math.max(260, contentBottom + 80))
   return (
-    <Paper elevation={0} sx={{ mb: 2.5, border: '1px solid', borderColor: 'divider', borderRadius: 1.25, overflow: 'hidden' }}>
-      <Box sx={{ px: 2, py: 1.25, display: 'flex', alignItems: 'center', gap: 1, bgcolor: '#fafbfc' }}>
+    <Paper elevation={0} sx={{ mb: 2.5, border: '1px solid', borderColor: 'divider', borderRadius: 1.5, overflow: 'hidden' }}>
+      <Box sx={{ px: 2, py: 1.25, display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 1, flexWrap: 'wrap', bgcolor: 'background.paper' }}>
         <AccountTreeIcon sx={{ fontSize: 18, color: 'primary.main' }} />
-        <Typography variant="subtitle2" sx={{ flexGrow: 1 }}>工作流状态</Typography>
+        <Typography variant="subtitle2" noWrap sx={{ flexGrow: 1, minWidth: 100 }}>工作流状态</Typography>
         <Chip size="small" variant="outlined" label={`${done}/${stages.length} 节点`}
-          color={failed ? 'error' : allDone ? 'success' : 'default'} sx={{ height: 22 }} />
-        <Chip size="small" label={summary} color={failed ? 'error' : running ? 'primary' : 'default'} sx={{ height: 22 }} />
-        <Button size="small" onClick={onDetail}>流程详情</Button>
-        <IconButton size="small" onClick={() => setOpen(v => !v)} aria-label={open ? '收起工作流状态' : '展开工作流状态'}>
+          color={failed ? 'error' : allDone ? 'success' : 'default'} sx={{ height: 22, flexShrink: 0 }} />
+        <Chip size="small" label={summary} color={failed ? 'error' : running ? 'primary' : 'default'} sx={{ height: 22, flexShrink: 0 }} />
+        <Button size="small" onClick={onDetail} sx={{ flexShrink: 0 }}>流程详情</Button>
+        <IconButton size="small" onClick={() => setOpen(v => !v)} aria-label={open ? '收起工作流状态' : '展开工作流状态'} sx={{ flexShrink: 0 }}>
           {open ? <ExpandLessIcon fontSize="small" /> : <ExpandMoreIcon fontSize="small" />}
         </IconButton>
       </Box>
       <LinearProgress variant="determinate" value={pct} color={barColor} sx={{ height: 3 }} />
       {open && (
         <>
-          <Box sx={{ display: 'flex', gap: 2, px: 2, py: 1, flexWrap: 'wrap', borderBottom: '1px solid', borderColor: 'divider', bgcolor: '#fff' }}>
-            {([['succeeded', '已完成', '#16a34a'], ['running', '执行中', '#635bff'], ['pending', '待执行', '#a0a7b5'], ['failed', '失败', '#d85160'], ['skipped', '已跳过', '#8b93a7']] as const).map(([k, label, color]) => (
+          <Box sx={{ display: 'flex', gap: 2, px: 2, py: 1, flexWrap: 'wrap', borderBottom: '1px solid', borderColor: 'divider', bgcolor: 'background.paper' }}>
+            {([['succeeded', '已完成', 'success.main'], ['running', '执行中', 'primary.main'], ['pending', '待执行', 'text.disabled'], ['failed', '失败', 'error.main'], ['skipped', '已跳过', 'text.secondary']] as const).map(([k, label, color]) => (
               <Box key={k} sx={{ display: 'flex', alignItems: 'center', gap: 0.5 }}>
                 <Box sx={{ width: 6, height: 6, borderRadius: '50%', bgcolor: color }} />
                 <Typography variant="caption" color="text.secondary">{label}</Typography>

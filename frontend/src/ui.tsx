@@ -12,30 +12,30 @@ import TerminalIcon from '@mui/icons-material/Terminal'
 import SearchIcon from '@mui/icons-material/Search'
 import { STATUS_LABEL, type TaskStatus } from './api'
 import { STATUS_ACCENT } from './theme'
+import { alpha, useTheme } from '@mui/material/styles'
 
-export function Logo({ size = 30 }: { size?: number }) {
+export function Logo({ size = 30, inverted = false }: { size?: number; inverted?: boolean }) {
   return (
-    <Box sx={{ display: 'flex', alignItems: 'center', gap: 1 }}>
+    <Box sx={{ display: 'inline-flex', alignItems: 'center', gap: 1.25 }}>
       <Box sx={{
-        width: size, height: size, borderRadius: `${size / 3}px`, display: 'grid', placeItems: 'center',
-        background: 'linear-gradient(135deg,#91a2ff 0%,#776de5 100%)',
-        boxShadow: '0 6px 18px rgba(104,121,232,0.2)',
+        width: size, height: size, borderRadius: `${size / 3.2}px`, display: 'grid', placeItems: 'center',
+        bgcolor: 'primary.main', flexShrink: 0,
       }}>
-        <BoltIcon sx={{ fontSize: size * 0.62, color: '#fff' }} />
+        <BoltIcon sx={{ fontSize: size * 0.6, color: '#fff' }} />
       </Box>
-      <Typography sx={{ fontWeight: 800, fontSize: size * 0.66, letterSpacing: '-0.035em' }}>Fux</Typography>
+      <Typography sx={{ fontWeight: 750, fontSize: size * 0.68, letterSpacing: '-0.035em', color: inverted ? '#ffffff' : 'text.primary' }}>Fux</Typography>
     </Box>
   )
 }
 
 export function PageHeader({ title, desc, actions }: { title: string; desc?: string; actions?: ReactNode }) {
   return (
-    <Box sx={{ display: 'flex', alignItems: 'flex-start', gap: 2, mb: 3.5 }}>
+    <Box sx={{ display: 'flex', alignItems: { xs: 'stretch', sm: 'flex-start' }, flexDirection: { xs: 'column', sm: 'row' }, gap: 2, mb: 3 }}>
       <Box sx={{ flexGrow: 1, minWidth: 0 }}>
         <Typography variant="h5">{title}</Typography>
-        {desc && <Typography variant="body2" color="text.secondary" sx={{ mt: 0.75, maxWidth: 760 }}>{desc}</Typography>}
+        {desc && <Typography variant="body2" color="text.secondary" sx={{ mt: 0.75, maxWidth: 720 }}>{desc}</Typography>}
       </Box>
-      {actions && <Box sx={{ display: 'flex', gap: 1, flexShrink: 0, pt: 0.25 }}>{actions}</Box>}
+      {actions && <Box sx={{ display: 'flex', gap: 1, flexWrap: 'wrap', flexShrink: 0, pt: { sm: 0.25 } }}>{actions}</Box>}
     </Box>
   )
 }
@@ -45,7 +45,7 @@ export function EmptyState({ icon, title, desc, action }: { icon?: ReactNode; ti
     <Box sx={{ textAlign: 'center', py: 7, px: 3 }}>
       <Box sx={{
         width: 58, height: 58, borderRadius: 2, display: 'grid', placeItems: 'center', mx: 'auto', mb: 2,
-        color: 'text.secondary', bgcolor: '#eef0f6', border: 'none',
+        color: 'text.secondary', bgcolor: 'action.hover', border: 'none',
         '& svg': { fontSize: 28 },
       }}>{icon || <InboxIcon />}</Box>
       <Typography variant="subtitle1" fontWeight={700}>{title}</Typography>
@@ -69,10 +69,16 @@ export function PersonAvatar({ name, size = 26 }: { name?: string; size?: number
 }
 
 export function StatusChip({ status }: { status: TaskStatus }) {
-  const c = STATUS_ACCENT[status] || '#718096'
+  const theme = useTheme()
+  const lightColor = STATUS_ACCENT[status] || '#718096'
+  const c = theme.palette.mode === 'light' ? lightColor : ({
+    planning: theme.palette.text.secondary, ready: theme.palette.info.main, in_progress: theme.palette.primary.main,
+    review: theme.palette.secondary.main, blocked: theme.palette.error.main, done: theme.palette.success.main,
+    archived: theme.palette.text.secondary, cancelled: theme.palette.text.secondary,
+  }[status] || theme.palette.text.secondary)
   return (
     <Chip size="small" label={STATUS_LABEL[status] || status}
-      sx={{ bgcolor: `${c}12`, color: c, border: 'none', fontWeight: 700, px: 0.5 }} />
+      sx={{ bgcolor: alpha(c, theme.palette.mode === 'dark' ? 0.16 : 0.09), color: c, border: 'none', fontWeight: 650, px: 0.5 }} />
   )
 }
 
@@ -166,8 +172,8 @@ export function Markdown({ text }: { text: string }) {
       '& hr': { border: 0, borderTop: '1px solid', borderColor: 'divider', my: 2 },
       '& table': { borderCollapse: 'collapse', width: '100%', my: 1.5, fontSize: 13, display: 'block', overflowX: 'auto' },
       '& th, & td': { border: '1px solid', borderColor: 'divider', px: 1, py: 0.5, textAlign: 'left' },
-      '& th': { bgcolor: '#f7f8fb', fontWeight: 700 },
-      '& code': { px: 0.5, py: 0.1, borderRadius: 0.5, bgcolor: 'rgba(29,36,58,0.07)', fontFamily: 'ui-monospace, SFMono-Regular, Menlo, monospace', fontSize: '0.92em' },
+      '& th': { bgcolor: 'action.hover', fontWeight: 700 },
+      '& code': { px: 0.5, py: 0.1, borderRadius: 0.5, bgcolor: 'action.hover', fontFamily: 'ui-monospace, SFMono-Regular, Menlo, monospace', fontSize: '0.92em' },
       '& pre': { bgcolor: '#0f172a', color: '#e2e8f0', p: 1.5, borderRadius: 1, overflowX: 'auto', my: 1.25, lineHeight: 1.6 },
       '& pre code': { bgcolor: 'transparent', color: 'inherit', p: 0, fontSize: 12.5, fontFamily: 'ui-monospace, SFMono-Regular, Menlo, monospace' },
     }}>

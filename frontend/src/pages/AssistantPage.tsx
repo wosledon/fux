@@ -341,10 +341,10 @@ export default function AssistantPage() {
   const lastProcessIdx = msgs.map(m => m.role).lastIndexOf('process')
 
   return (
-    <Box sx={{ height: '100%', display: 'flex', overflow: 'hidden', bgcolor: '#fbfbfd' }}>
+    <Box sx={{ height: '100%', display: 'flex', overflow: 'hidden', bgcolor: 'background.default' }}>
       {/* 会话列表 */}
       <Box sx={{
-        width: 264, flexShrink: 0, borderRight: '1px solid', borderColor: 'divider', bgcolor: '#fff',
+        width: 264, flexShrink: 0, borderRight: '1px solid', borderColor: 'divider', bgcolor: 'background.paper',
         display: { xs: 'none', md: 'flex' }, flexDirection: 'column', minHeight: 0,
       }}>
         <Box sx={{ p: 2 }}>
@@ -380,7 +380,7 @@ export default function AssistantPage() {
         </Box>
         <Divider />
         <Box sx={{ p: 2, display: 'flex', alignItems: 'center', gap: 1.25 }}>
-          <Box sx={{ width: 30, height: 30, borderRadius: 1, bgcolor: '#eceaff', color: 'primary.main', display: 'grid', placeItems: 'center', flexShrink: 0 }}>
+          <Box sx={{ width: 30, height: 30, borderRadius: 1, bgcolor: 'action.selected', color: 'primary.main', display: 'grid', placeItems: 'center', flexShrink: 0 }}>
             <SmartToyOutlinedIcon sx={{ fontSize: 17 }} />
           </Box>
           <Box sx={{ minWidth: 0, flexGrow: 1 }}>
@@ -399,8 +399,8 @@ export default function AssistantPage() {
 
       {/* 对话主区 */}
       <Box sx={{ flexGrow: 1, minWidth: 0, display: 'flex', flexDirection: 'column', minHeight: 0 }}>
-        <Box sx={{ height: 66, px: { xs: 2, md: 3 }, display: 'flex', alignItems: 'center', gap: 1.5, bgcolor: '#fff', borderBottom: '1px solid', borderColor: 'divider', flexShrink: 0 }}>
-          <Box sx={{ width: 34, height: 34, borderRadius: 1, bgcolor: 'linear-gradient(135deg,#635bff,#9b8cff)', color: '#fff', display: 'grid', placeItems: 'center' }}>
+        <Box sx={{ height: 66, px: { xs: 2, md: 3 }, display: 'flex', alignItems: 'center', gap: 1.5, bgcolor: 'background.paper', borderBottom: '1px solid', borderColor: 'divider', flexShrink: 0 }}>
+          <Box sx={{ width: 34, height: 34, borderRadius: 1.5, bgcolor: 'primary.main', color: 'primary.contrastText', display: 'grid', placeItems: 'center' }}>
             <AutoAwesomeIcon sx={{ fontSize: 19 }} />
           </Box>
           <Box>
@@ -433,7 +433,7 @@ export default function AssistantPage() {
                       <Box key={i} sx={{ display: 'flex', justifyContent: 'flex-end' }}>
                         <Box sx={{
                           maxWidth: { xs: '88%', md: '72%' }, px: 2, py: 1.25,
-                          borderRadius: '16px 16px 4px 16px', bgcolor: 'primary.main', color: '#fff',
+                          borderRadius: '16px 16px 4px 16px', bgcolor: 'primary.main', color: 'primary.contrastText',
                           fontSize: 14, lineHeight: 1.7, whiteSpace: 'pre-wrap', wordBreak: 'break-word',
                         }}>{m.content}</Box>
                       </Box>
@@ -473,7 +473,7 @@ export default function AssistantPage() {
           </Box>
         </Box>
 
-        <Box sx={{ px: { xs: 2, md: 4 }, py: 2, bgcolor: '#fff', borderTop: '1px solid', borderColor: 'divider', flexShrink: 0 }}>
+        <Box sx={{ px: { xs: 2, md: 4 }, py: 2, bgcolor: 'background.paper', borderTop: '1px solid', borderColor: 'divider', flexShrink: 0 }}>
           <Box sx={{ maxWidth: 860, mx: 'auto' }}>
             {msgs.length === 0 && (
               <Stack direction="row" spacing={1} sx={{ mb: 1.25, flexWrap: 'wrap', gap: 1 }}>
@@ -517,7 +517,7 @@ export default function AssistantPage() {
 
       {/* 工作区上下文 */}
       <Box sx={{
-        width: 300, flexShrink: 0, borderLeft: '1px solid', borderColor: 'divider', bgcolor: '#fff',
+        width: 300, flexShrink: 0, borderLeft: '1px solid', borderColor: 'divider', bgcolor: 'background.paper',
         display: { xs: 'none', lg: 'block' }, overflowY: 'auto', p: 2.25,
       }}>
         <Typography variant="overline" color="text.secondary">工作区概览</Typography>
@@ -542,7 +542,7 @@ export default function AssistantPage() {
         <Stack spacing={0.5}>
           {SUGGESTIONS.map(s => (
             <Button key={s} size="small" endIcon={<ArrowForwardIcon sx={{ fontSize: 13 }} />} onClick={() => void send(s)}
-              sx={{ justifyContent: 'space-between', textTransform: 'none', color: 'text.primary', bgcolor: '#f7f8fb', borderRadius: 1.25, px: 1.25, py: 0.75 }}>
+              sx={{ justifyContent: 'space-between', textTransform: 'none', color: 'text.primary', bgcolor: 'action.hover', borderRadius: 1.25, px: 1.25, py: 0.75 }}>
               <Typography variant="caption" noWrap>{s}</Typography>
             </Button>
           ))}

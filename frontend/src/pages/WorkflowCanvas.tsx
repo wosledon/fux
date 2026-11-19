@@ -1,5 +1,6 @@
 import { useMemo, useRef, useState } from 'react'
 import { Box, Button, Chip, Paper, Stack, Typography } from '@mui/material'
+import { useTheme } from '@mui/material/styles'
 import AddIcon from '@mui/icons-material/Add'
 import AutoFixHighIcon from '@mui/icons-material/AutoFixHigh'
 import AutorenewIcon from '@mui/icons-material/Autorenew'
@@ -64,6 +65,8 @@ type Props = {
 }
 
 export default function WorkflowCanvas({ stages, agents, projects, selected, onChange, onSelect, readonly = false, statusOf, metaOf }: Props) {
+  const theme = useTheme()
+  const edgeColor = theme.palette.text.secondary
   const nodeH = readonly ? NODE_H_STATUS : NODE_H
   const canvasRef = useRef<HTMLDivElement>(null)
   const dragRef = useRef<{ key: string; dx: number; dy: number } | null>(null)
@@ -146,7 +149,7 @@ export default function WorkflowCanvas({ stages, agents, projects, selected, onC
   return (
       <Box sx={{ display: 'flex', flexDirection: 'column', height: '100%', minHeight: readonly ? 240 : 460 }}>
       {!readonly && (
-      <Box sx={{ display: 'flex', alignItems: 'center', gap: 1, px: 2, py: 1.25, borderBottom: '1px solid', borderColor: 'divider', bgcolor: '#fafbfc' }}>
+      <Box sx={{ display: 'flex', alignItems: 'center', gap: 1, px: 2, py: 1.25, borderBottom: '1px solid', borderColor: 'divider', bgcolor: 'background.paper' }}>
         <Button size="small" startIcon={<AddIcon />} onClick={addNode}>添加节点</Button>
         <Button size="small" variant={connectMode ? 'contained' : 'outlined'} color={connectMode ? 'primary' : 'inherit'}
           startIcon={<LinkIcon />}
@@ -164,15 +167,15 @@ export default function WorkflowCanvas({ stages, agents, projects, selected, onC
         onClick={() => { if (!connectMode) onSelect(null) }}
         sx={{
           position: 'relative', flexGrow: 1, overflow: 'auto',
-          backgroundImage: 'radial-gradient(circle, #d7dbe4 1px, transparent 1px)',
-          backgroundSize: '18px 18px', bgcolor: '#f7f8fb',
+          backgroundImage: theme => `radial-gradient(circle, ${theme.palette.divider} 1px, transparent 1px)`,
+          backgroundSize: '18px 18px', bgcolor: 'background.default',
           cursor: connectMode ? 'crosshair' : 'default',
         }}>
         <Box sx={{ position: 'relative', width: maxX, height: maxY }}>
           <svg width={maxX} height={maxY} style={{ position: 'absolute', inset: 0, pointerEvents: 'none' }}>
             <defs>
               <marker id="wf-arrow" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
-                <path d="M 0 0 L 10 5 L 0 10 z" fill="#8b93a7" />
+                <path d="M 0 0 L 10 5 L 0 10 z" fill={edgeColor} />
               </marker>
             </defs>
             {edges.map((e, i) => {
@@ -183,10 +186,10 @@ export default function WorkflowCanvas({ stages, agents, projects, selected, onC
               const mid = Math.max(40, Math.abs(x2 - x1) / 2)
               const d = `M ${x1} ${y1} C ${x1 + mid} ${y1}, ${x2 - mid} ${y2}, ${x2} ${y2}`
               const st = statusOf?.(e.to)
-              const color = st === 'succeeded' || st === 'finished' ? '#16a34a'
-                : st === 'running' ? '#635bff'
-                : st === 'failed' || st === 'cancelled' ? '#d85160'
-                : st === 'skipped' ? '#a0a7b5' : '#8b93a7'
+              const color = st === 'succeeded' || st === 'finished' ? theme.palette.success.main
+                : st === 'running' ? theme.palette.primary.main
+                : st === 'failed' || st === 'cancelled' ? theme.palette.error.main
+                : theme.palette.text.secondary
               return (
                 <g key={i}>
                   <path d={d} stroke={color} strokeWidth={st === 'running' ? 2.1 : 1.8} fill="none" markerEnd="url(#wf-arrow)"
@@ -208,7 +211,7 @@ export default function WorkflowCanvas({ stages, agents, projects, selected, onC
               const a = positions.get(connectFrom)
               if (!a) return null
               return <line x1={a.x + NODE_W} y1={a.y + NODE_H / 2} x2={cursor.x} y2={cursor.y}
-                stroke="#635bff" strokeWidth={1.5} strokeDasharray="5 4" />
+                stroke={theme.palette.primary.main} strokeWidth={1.5} strokeDasharray="5 4" />
             })()}
           </svg>
 
@@ -232,8 +235,8 @@ export default function WorkflowCanvas({ stages, agents, projects, selected, onC
                   p: 1.5, borderRadius: 1.5, cursor: readonly ? 'pointer' : connectMode ? 'crosshair' : 'grab', userSelect: 'none',
                   border: '2px solid',
                   borderColor: isSource ? 'warning.main' : isSelected ? 'primary.main' : (readonly && statusBorder ? statusBorder : 'divider'),
-                  boxShadow: isSelected ? '0 6px 18px rgba(99,91,255,0.16)' : '0 1px 3px rgba(29,36,58,0.06)',
-                  bgcolor: status === 'running' ? '#fbfaff' : '#fff',
+                  boxShadow: isSelected ? '0 6px 18px rgba(37,99,235,0.14)' : 'none',
+                  bgcolor: status === 'running' ? 'action.selected' : 'background.paper',
                   ...(status === 'running' ? { animation: 'fuxNodePulse 1.8s ease-in-out infinite', willChange: 'box-shadow' } : {}),
                 }}>
                 <Box sx={{ display: 'flex', alignItems: 'center', gap: 0.5 }}>

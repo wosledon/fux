@@ -73,8 +73,8 @@ export default function InboxPage() {
 
         <Box sx={{ display: 'flex', alignItems: 'center', mb: 2.5, gap: 2 }}>
           <Tabs value={filter} onChange={(_, v) => setFilter(v)} sx={{
-            minHeight: 42, p: 0.5, bgcolor: '#e9ecf3', borderRadius: 1.5,
-            '& .MuiTabs-indicator': { height: '100%', borderRadius: 1.25, bgcolor: '#ffffff', boxShadow: '0 1px 4px rgba(29,36,58,0.1)' },
+            minHeight: 42, p: 0.5, bgcolor: 'action.hover', borderRadius: 1.5,
+            '& .MuiTabs-indicator': { height: '100%', borderRadius: 1.25, bgcolor: 'background.paper', boxShadow: '0 1px 4px rgba(24,34,48,0.1)' },
             '& .MuiTab-root': { zIndex: 1 },
           }}>
             <Tab value="all" label={`全部消息 ${items.length}`} disableRipple sx={{ minHeight: 34, py: 0, px: 2, '&.Mui-selected': { color: 'text.primary' } }} />

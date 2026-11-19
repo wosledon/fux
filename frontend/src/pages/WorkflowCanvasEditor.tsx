@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { Box, Button, Chip, IconButton, Paper, Stack, Tooltip, Typography } from '@mui/material'
+import { useTheme } from '@mui/material/styles'
 import AddIcon from '@mui/icons-material/Add'
 import AutoFixHighIcon from '@mui/icons-material/AutoFixHigh'
 import AutorenewIcon from '@mui/icons-material/Autorenew'
@@ -24,6 +25,8 @@ const MIN_ZOOM = 0.35
 const MAX_ZOOM = 2.2
 
 export default function WorkflowCanvasEditor({ stages, agents, projects, selected, onChange, onSelect }: Props) {
+  const theme = useTheme()
+  const edgeColor = theme.palette.text.secondary
   const canvasRef = useRef<HTMLDivElement>(null)
   const dragRef = useRef<{ key: string; dx: number; dy: number; moved: boolean } | null>(null)
   const suppressNodeClickRef = useRef(false)
@@ -224,7 +227,7 @@ export default function WorkflowCanvasEditor({ stages, agents, projects, selecte
 
   return (
     <Box sx={{ display: 'flex', flexDirection: 'column', height: '100%', minHeight: 460 }}>
-      <Box sx={{ display: 'flex', alignItems: 'center', gap: 1, px: 2, py: 1, borderBottom: '1px solid', borderColor: 'divider', bgcolor: '#fafbfc', flexWrap: 'wrap' }}>
+      <Box sx={{ display: 'flex', alignItems: 'center', gap: 1, px: 2, py: 1, borderBottom: '1px solid', borderColor: 'divider', bgcolor: 'background.paper', flexWrap: 'wrap' }}>
         <Button size="small" startIcon={<AddIcon />} onClick={addNode}>添加节点</Button>
         <Button size="small" variant={connectMode ? 'contained' : 'outlined'} color={connectMode ? 'primary' : 'inherit'}
           startIcon={<LinkIcon />}
@@ -250,10 +253,10 @@ export default function WorkflowCanvasEditor({ stages, agents, projects, selecte
         onClick={onCanvasClick}
         sx={{
           position: 'relative', flexGrow: 1, overflow: 'hidden', touchAction: 'none',
-          backgroundImage: 'radial-gradient(circle, #d7dbe4 1px, transparent 1px)',
+          backgroundImage: theme => `radial-gradient(circle, ${theme.palette.divider} 1px, transparent 1px)`,
           backgroundSize: `${18 * view.zoom}px ${18 * view.zoom}px`,
           backgroundPosition: `${view.x}px ${view.y}px`,
-          bgcolor: '#f7f8fb',
+          bgcolor: 'background.default',
           cursor: connectMode ? 'crosshair' : 'grab',
           '&:active': { cursor: connectMode ? 'crosshair' : 'grabbing' },
         }}
@@ -266,7 +269,7 @@ export default function WorkflowCanvasEditor({ stages, agents, projects, selecte
           <svg width={worldW} height={worldH} style={{ position: 'absolute', inset: 0, pointerEvents: 'none' }}>
             <defs>
               <marker id="wf-edit-arrow" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
-                <path d="M 0 0 L 10 5 L 0 10 z" fill="#8b93a7" />
+                <path d="M 0 0 L 10 5 L 0 10 z" fill={edgeColor} />
               </marker>
             </defs>
             {edges.map((e, i) => {
@@ -280,7 +283,7 @@ export default function WorkflowCanvasEditor({ stages, agents, projects, selecte
               const d = `M ${x1} ${y1} C ${x1 + mid} ${y1}, ${x2 - mid} ${y2}, ${x2} ${y2}`
               return (
                 <g key={i}>
-                  <path d={d} stroke="#8b93a7" strokeWidth={1.8} fill="none" markerEnd="url(#wf-edit-arrow)"
+                  <path d={d} stroke={edgeColor} strokeWidth={1.8} fill="none" markerEnd="url(#wf-edit-arrow)"
                     vectorEffect="non-scaling-stroke" />
                   <path d={d} stroke="transparent" strokeWidth={16} fill="none"
                     vectorEffect="non-scaling-stroke"
@@ -298,7 +301,7 @@ export default function WorkflowCanvasEditor({ stages, agents, projects, selecte
               const a = positions.get(connectFrom)
               if (!a) return null
               return <line x1={a.x + NODE_W} y1={a.y + NODE_H / 2} x2={cursor.x} y2={cursor.y}
-                stroke="#635bff" strokeWidth={1.5} strokeDasharray="5 4" vectorEffect="non-scaling-stroke" />
+                stroke={theme.palette.primary.main} strokeWidth={1.5} strokeDasharray="5 4" vectorEffect="non-scaling-stroke" />
             })()}
           </svg>
 
@@ -320,8 +323,8 @@ export default function WorkflowCanvasEditor({ stages, agents, projects, selecte
                   cursor: connectMode ? 'crosshair' : 'grab',
                   border: '2px solid',
                   borderColor: isSource ? 'warning.main' : isSelected ? 'primary.main' : 'divider',
-                  boxShadow: isSelected ? '0 6px 18px rgba(99,91,255,0.16)' : '0 1px 3px rgba(29,36,58,0.06)',
-                  bgcolor: '#fff',
+                  boxShadow: isSelected ? '0 6px 18px rgba(37,99,235,0.14)' : 'none',
+                  bgcolor: 'background.paper',
                   '&:active': { cursor: connectMode ? 'crosshair' : 'grabbing' },
                 }}>
                 <Box sx={{ display: 'flex', alignItems: 'center', gap: 0.5 }}>

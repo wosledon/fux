@@ -157,9 +157,9 @@ export default function WorkflowEditorPage() {
     : []
 
   return (
-    <Box sx={{ height: '100%', display: 'flex', flexDirection: 'column', bgcolor: '#f7f8fb', minHeight: 0 }}>
+    <Box sx={{ height: '100%', display: 'flex', flexDirection: 'column', bgcolor: 'background.default', minHeight: 0 }}>
       <Box sx={{
-        px: { xs: 2, md: 2.5 }, py: 1.25, bgcolor: '#fff', borderBottom: '1px solid', borderColor: 'divider',
+        px: { xs: 2, md: 2.5 }, py: 1.25, bgcolor: 'background.paper', borderBottom: '1px solid', borderColor: 'divider',
         display: 'flex', alignItems: 'center', gap: 1.25, flexWrap: 'wrap', flexShrink: 0,
       }}>
         <Tooltip title="返回工作流">
@@ -193,7 +193,7 @@ export default function WorkflowEditorPage() {
             selected={selected} onChange={setStages} onSelect={setSelected} />
         </Box>
 
-        <Box sx={{ borderLeft: { md: '1px solid' }, borderTop: { xs: '1px solid', md: 'none' }, borderColor: 'divider', bgcolor: '#fff', p: 2, overflowY: 'auto' }}>
+        <Box sx={{ borderLeft: { md: '1px solid' }, borderTop: { xs: '1px solid', md: 'none' }, borderColor: 'divider', bgcolor: 'background.paper', p: 2, overflowY: 'auto' }}>
           {!sel && (
             <Stack spacing={1.5} sx={{ color: 'text.secondary' }}>
               <Typography variant="subtitle2" color="text.primary" fontWeight={700}>画布</Typography>

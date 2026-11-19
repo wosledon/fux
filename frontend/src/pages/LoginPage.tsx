@@ -1,11 +1,14 @@
 import { useState } from 'react'
 import { useNavigate, useSearchParams } from 'react-router-dom'
-import { Box, Tab, Tabs, TextField, Button, Typography, Alert, Stack, Chip } from '@mui/material'
+import { Box, Tab, Tabs, TextField, Button, Typography, Alert, Stack, Chip, IconButton, Tooltip } from '@mui/material'
 import ViewKanbanIcon from '@mui/icons-material/ViewKanban'
 import SmartToyIcon from '@mui/icons-material/SmartToy'
 import HubIcon from '@mui/icons-material/Hub'
 import ShieldIcon from '@mui/icons-material/Shield'
+import LightModeIcon from '@mui/icons-material/LightMode'
+import DarkModeIcon from '@mui/icons-material/DarkMode'
 import { useAuth } from '../auth'
+import { useColorMode } from '../ThemeModeProvider'
 import { Logo } from '../ui'
 
 const FEATURES = [
@@ -17,6 +20,7 @@ const FEATURES = [
 
 export default function LoginPage() {
   const { login, register } = useAuth()
+  const { mode, toggleMode } = useColorMode()
   const nav = useNavigate()
   const [params] = useSearchParams()
   const [tab, setTab] = useState(0)
@@ -36,42 +40,51 @@ export default function LoginPage() {
   }
 
   return (
-    <Box sx={{ height: '100%', display: 'flex' }}>
+    <Box sx={{ height: '100dvh', display: 'flex', bgcolor: 'background.paper' }}>
       <Box sx={{
-        flex: 1, display: { xs: 'none', md: 'flex' }, flexDirection: 'column', justifyContent: 'center', px: 8,
-        background: 'radial-gradient(900px 540px at 20% 10%, rgba(99,91,255,0.13), transparent), radial-gradient(700px 480px at 80% 90%, rgba(135,91,247,0.09), transparent), #f8f8fc',
-        borderRight: '1px solid', borderColor: 'divider',
+        flex: 1, display: { xs: 'none', md: 'flex' }, flexDirection: 'column', justifyContent: 'center', px: { md: 6, lg: 9 },
+        position: 'relative', overflow: 'hidden', bgcolor: '#151b28',
+        '&::before': { content: '""', position: 'absolute', width: 620, height: 620, left: -220, top: -240, borderRadius: '50%', background: 'radial-gradient(circle, rgba(37,99,235,0.25), transparent 68%)' },
+        '&::after': { content: '""', position: 'absolute', width: 520, height: 520, right: -180, bottom: -260, borderRadius: '50%', background: 'radial-gradient(circle, rgba(56,189,248,0.10), transparent 70%)' },
       }}>
-        <Logo size={40} />
-        <Typography variant="h4" sx={{ mt: 4, mb: 1.5, maxWidth: 460 }}>
-          让智能体工作流<br />替你推进每一张卡片
-        </Typography>
-        <Typography color="text.secondary" sx={{ mb: 5, maxWidth: 420 }}>
-          Fux 是一个 AI 工作台：人定义目标、评审结果；智能体认领任务、执行工作、流式交付过程。
-        </Typography>
-        <Stack spacing={2.5}>
-          {FEATURES.map(f => (
-            <Box key={f.t} sx={{ display: 'flex', gap: 2, alignItems: 'flex-start' }}>
-              <Box sx={{ width: 38, height: 38, borderRadius: 1.25, display: 'grid', placeItems: 'center', bgcolor: '#eceaff', color: 'primary.main', flexShrink: 0 }}>
-                {f.icon}
+        <Box sx={{ position: 'relative', zIndex: 1, maxWidth: 540 }}>
+          <Logo size={38} inverted />
+          <Chip label="AI-NATIVE WORKSPACE" size="small" sx={{ mt: 5, color: '#a9c5ff', bgcolor: 'rgba(96,165,250,0.10)', border: '1px solid rgba(96,165,250,0.18)', letterSpacing: '0.08em', fontSize: 10 }} />
+          <Typography variant="h4" sx={{ mt: 2.5, mb: 2, maxWidth: 500, color: '#f5f7fb', fontSize: { md: 34, lg: 40 } }}>
+            让智能体工作流<br />替你推进每一张卡片
+          </Typography>
+          <Typography sx={{ mb: 5, maxWidth: 460, color: '#9aa7b8', lineHeight: 1.8 }}>
+            人定义目标、评审结果；智能体认领任务、执行工作，并实时交付完整过程。
+          </Typography>
+          <Stack spacing={2.25}>
+            {FEATURES.map(f => (
+              <Box key={f.t} sx={{ display: 'flex', gap: 1.75, alignItems: 'center' }}>
+                <Box sx={{ width: 38, height: 38, borderRadius: 1.5, display: 'grid', placeItems: 'center', bgcolor: 'rgba(255,255,255,0.06)', color: '#7db4ff', flexShrink: 0 }}>
+                  {f.icon}
+                </Box>
+                <Box>
+                  <Typography fontWeight={600} sx={{ color: '#e7ebf2' }}>{f.t}</Typography>
+                  <Typography variant="body2" sx={{ color: '#8f9ab0' }}>{f.d}</Typography>
+                </Box>
               </Box>
-              <Box>
-                <Typography fontWeight={700}>{f.t}</Typography>
-                <Typography variant="body2" color="text.secondary">{f.d}</Typography>
-              </Box>
-            </Box>
-          ))}
-        </Stack>
+            ))}
+          </Stack>
+        </Box>
       </Box>
 
-      <Box sx={{ width: { xs: '100%', md: 480 }, display: 'grid', placeItems: 'center', p: 3 }}>
+      <Box sx={{ width: { xs: '100%', md: 500 }, display: 'grid', placeItems: 'center', p: 3, position: 'relative', bgcolor: 'background.paper' }}>
+        <Tooltip title={mode === 'dark' ? '切换到浅色模式' : '切换到深色模式'}>
+          <IconButton aria-label="切换明暗主题" onClick={toggleMode} sx={{ position: 'absolute', top: 20, right: 20 }}>
+            {mode === 'dark' ? <LightModeIcon /> : <DarkModeIcon />}
+          </IconButton>
+        </Tooltip>
         <Box sx={{ width: '100%', maxWidth: 380 }}>
           <Box sx={{ display: { xs: 'block', md: 'none' }, mb: 3 }}><Logo size={34} /></Box>
           <Typography variant="h5" gutterBottom>{tab === 0 ? '欢迎回来' : '创建账号'}</Typography>
           <Typography color="text.secondary" sx={{ mb: 3 }}>
             {tab === 0 ? '登录以继续你的工作区' : '注册后即可创建工作区并邀请成员'}
           </Typography>
-          <Tabs value={tab} onChange={(_, v) => { setTab(v); setErr('') }} sx={{ mb: 3 }}>
+          <Tabs value={tab} onChange={(_, v) => { setTab(v); setErr('') }} variant="fullWidth" sx={{ mb: 3 }}>
             <Tab label="登录" /><Tab label="注册" />
           </Tabs>
           <Box sx={{ display: 'grid', gap: 2 }}>
