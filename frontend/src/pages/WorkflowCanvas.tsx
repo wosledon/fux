@@ -2,6 +2,7 @@ import { useMemo, useRef, useState } from 'react'
 import { Box, Button, Chip, Paper, Stack, Typography } from '@mui/material'
 import AddIcon from '@mui/icons-material/Add'
 import AutoFixHighIcon from '@mui/icons-material/AutoFixHigh'
+import AutorenewIcon from '@mui/icons-material/Autorenew'
 import LinkIcon from '@mui/icons-material/Link'
 import type { Agent, Project, WorkflowStage } from '../api'
 
@@ -188,7 +189,9 @@ export default function WorkflowCanvas({ stages, agents, projects, selected, onC
                 : st === 'skipped' ? '#a0a7b5' : '#8b93a7'
               return (
                 <g key={i}>
-                  <path d={d} stroke={color} strokeWidth={1.8} fill="none" markerEnd="url(#wf-arrow)" />
+                  <path d={d} stroke={color} strokeWidth={st === 'running' ? 2.1 : 1.8} fill="none" markerEnd="url(#wf-arrow)"
+                    strokeDasharray={st === 'running' ? '7 5' : undefined}
+                    style={st === 'running' ? { animation: 'fuxDash 0.9s linear infinite' } : undefined} />
                   {!readonly && (
                     <path d={d} stroke="transparent" strokeWidth={14} fill="none" style={{ pointerEvents: 'stroke', cursor: 'pointer' }}
                       onClick={ev => {
@@ -230,11 +233,16 @@ export default function WorkflowCanvas({ stages, agents, projects, selected, onC
                   border: '2px solid',
                   borderColor: isSource ? 'warning.main' : isSelected ? 'primary.main' : (readonly && statusBorder ? statusBorder : 'divider'),
                   boxShadow: isSelected ? '0 6px 18px rgba(99,91,255,0.16)' : '0 1px 3px rgba(29,36,58,0.06)',
-                  bgcolor: '#fff',
+                  bgcolor: status === 'running' ? '#fbfaff' : '#fff',
+                  ...(status === 'running' ? { animation: 'fuxNodePulse 1.8s ease-in-out infinite', willChange: 'box-shadow' } : {}),
                 }}>
                 <Box sx={{ display: 'flex', alignItems: 'center', gap: 0.5 }}>
                   <Typography variant="body2" fontWeight={700} noWrap sx={{ flexGrow: 1 }}>{s.name || s.key}</Typography>
-                  {status && <Chip size="small" label={statusLabel(status)} color={statusChipColor(status)} sx={{ height: 18, fontSize: 10 }} />}
+                  {status && (
+                    <Chip size="small" label={statusLabel(status)} color={statusChipColor(status)}
+                      icon={status === 'running' ? <AutorenewIcon sx={{ fontSize: '12px !important', animation: 'fuxSpin 1.4s linear infinite' }} /> : undefined}
+                      sx={{ height: 18, fontSize: 10, ...(status === 'running' ? { '& .MuiChip-icon': { ml: 0.5, mr: -0.25 } } : {}) }} />
+                  )}
                 </Box>
                 <Typography variant="caption" color="text.secondary" display="block" noWrap sx={{ fontFamily: 'monospace' }}>{s.key}</Typography>
                 <Stack direction="row" spacing={0.5} sx={{ mt: 1, flexWrap: 'wrap', gap: 0.5 }}>

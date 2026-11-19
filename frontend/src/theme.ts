@@ -43,6 +43,14 @@ export const theme = createTheme({
             from: { transform: 'rotate(0deg)' },
             to: { transform: 'rotate(360deg)' },
           },
+          '@keyframes fuxNodePulse': {
+            '0%, 100%': { boxShadow: '0 0 0 0 rgba(99,91,255,0.05), 0 2px 8px rgba(99,91,255,0.08)' },
+            '50%': { boxShadow: '0 0 0 4px rgba(99,91,255,0.12), 0 8px 24px rgba(99,91,255,0.18)' },
+          },
+          '@keyframes fuxDash': {
+            from: { strokeDashoffset: 24 },
+            to: { strokeDashoffset: 0 },
+          },
         },
       },
     },
