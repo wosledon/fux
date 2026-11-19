@@ -35,7 +35,7 @@ src/
   cmd/               辅助二进制（显式 [[bin]]，autobins=false）
     fux-runtime.rs     节点执行器：安装即注册
     fux-mock-agent.rs  演示/测试用 ACP mock（LOOP/FAIL/SLEEP/ASK 关键字驱动）
-    fux-mcp.rs         内置 workspace MCP Server（助理操作工作台）
+    fux-mcp.rs         内置 workspace MCP Server（助理管理工作台）
 migrations/          SQLx 迁移
 tests/api.rs         集成测试（RBAC/状态机/端到端/重试/质量阀）
 frontend/            React 19 + MUI 前端

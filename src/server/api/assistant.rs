@@ -345,7 +345,8 @@ async fn chat(
     let context = build_context(&state, &ws).await;
     let mut prompt = format!(
         "你是 Fux 工作区助理，用简体中文回答，尽量简洁并使用 Markdown。\n\
-         你可以通过 fux-workspace MCP 工具查询/创建/移动任务与评论。执行写操作前先说明将要做什么。\n\n\
+         你可以通过 fux-workspace MCP 管理任务、项目、工作流、SKILL、智能体、任务类型、MCP、CLI 与成员；需要各类 ID 时先调用 workspace_overview，查看任务运行与节点状态用 get_task。\n\
+         执行写操作前先说明将要做什么；删除、覆盖、发起工作流、邀请成员等影响较大的操作必须先征得用户确认。所有操作以当前用户身份执行，并受工作区权限与任务状态机约束。\n\n\
          ## 工作区上下文\n{context}\n"
     );
     for (role, content) in history.iter().rev() {

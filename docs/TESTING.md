@@ -2,7 +2,7 @@
 
 本文只写「怎么跑、怎么加」；功能需求见 [PRD.md](PRD.md)，命令速查见 [AGENTS.md](../AGENTS.md)。
 
-## 现有测试（共 13 个：6 单元 + 7 集成）
+## 现有测试（共 14 个：7 单元 + 7 集成）
 
 | 位置                     | 名称                                    | 覆盖                                                                                |
 | ------------------------ | --------------------------------------- | ----------------------------------------------------------------------------------- |
@@ -17,6 +17,7 @@
 | `src/server/workflow.rs` | `validate_dag` / `readiness_and_sinks`  | DAG 校验、就绪判定、汇点与下游集                                                    |
 | `src/git.rs`             | 单元测试                                | PR/MR 链接推导等纯函数                                                              |
 | `src/server/secrets.rs`  | `roundtrip`                             | AES-256-GCM 加解密                                                                  |
+| `src/cmd/fux_mcp_tools.rs` | `exposes_workspace_management_tools`  | 内置 MCP 工具清单、必选工具与重名检查                                               |
 
 ```powershell
 cargo test                                                     # 全部
