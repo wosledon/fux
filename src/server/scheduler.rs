@@ -384,10 +384,12 @@ async fn dispatch_inner(
     let mut stage_name = String::new();
     let mut base_branch: Option<String> = None;
     if let Some(st) = &stage_spec {
+        let inputs = workflow::inputs_of(&task);
         stage_key = st.key.clone();
-        stage_name = st.name.clone();
-        content.push_str(&format!("\n\n## 当前工作流节点：{}\n", st.name));
+        stage_name = workflow::render_template(&st.name, &inputs);
+        content.push_str(&format!("\n\n## 当前工作流节点：{}\n", stage_name));
         if let Some(extra) = &st.prompt_append {
+            let extra = workflow::render_template(extra, &inputs);
             if !extra.trim().is_empty() {
                 content.push_str(extra.trim());
                 content.push('\n');

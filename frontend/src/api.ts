@@ -51,7 +51,7 @@ export interface Task {
   id: string; boardId: string; workspaceId: string; typeId?: string; projectId?: string
   title: string; content: string; status: TaskStatus; blockedFrom?: string; blockReason?: string
   laneId?: string; priority: number; tags: string; assigneeAgentId?: string; workflowId?: string
-  branch?: string; prUrl?: string; prState?: string; mergeCommit?: string
+  branch?: string; prUrl?: string; prState?: string; mergeCommit?: string; workflowInputs: string
   retryCount: number; version: number; createdBy?: string; createdAt: string; updatedAt: string
   workflowName?: string; stageTotal?: number; stageDone?: number
   commentCount?: number; runCount?: number; lastRunStatus?: string
@@ -65,13 +65,18 @@ export interface Agent {
   systemPrompt: string; policy: string; gates: string; maxConcurrent: number; paused: number; matchTags: string
   skillIds?: string[]; mcpServers?: { id: string; toolWhitelist: string[] }[]
 }
+export interface WorkflowVariable {
+  key: string; label: string; description?: string
+  required?: boolean; default?: string; options?: string[]
+}
 export interface WorkflowStage {
   key: string; name: string; agentId: string; projectId?: string
-  promptAppend?: string; dependsOn: string[]; when?: string; x?: number; y?: number
+  promptAppend?: string; dependsOn: string[]; when?: string
+  maxRetries?: number; x?: number; y?: number
 }
 export interface Workflow {
   id: string; workspaceId: string; name: string; description: string
-  stages: string; createdAt: string; updatedAt: string
+  variables: string; stages: string; createdAt: string; updatedAt: string
 }
 export interface Delivery {
   id: string; taskId: string; projectId: string; nodeKey: string

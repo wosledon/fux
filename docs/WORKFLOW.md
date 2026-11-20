@@ -11,6 +11,7 @@
 | `id`                        | TEXT PK                                      | `crate::new_id()`        |
 | `workspace_id`              | TEXT NOT NULL → workspaces ON DELETE CASCADE | 隔离边界                 |
 | `name` / `description`      | TEXT                                         | 模板名 / 说明            |
+| `variables`                 | TEXT NOT NULL DEFAULT `'[]'`                 | 发起变量（JSON，见 §3）  |
 | `stages`                    | TEXT NOT NULL DEFAULT `'[]'`                 | 节点数组（JSON，见 1.2） |
 | `created_at` / `updated_at` | TEXT                                         | `crate::now()` 格式      |
 
@@ -24,7 +25,8 @@
   "projectId": "uuid|null",     // null = 继承任务主项目
   "promptAppend": "只改 proto/**",
   "dependsOn": [],              // 空数组 = 入口节点
-  "when": "tag:backend",        // 可选，见 §3
+  "when": "tag:backend",        // 可选，见 §4
+  "maxRetries": 2,              // 可选，突然中断重试上限 0-5
   "x": 48, "y": 48               // 可选，画布坐标（仅展示/编辑用）
 }
 ```
@@ -34,7 +36,8 @@
 1. 至少 1 个节点；`key` 唯一且匹配 `^[a-z0-9-]{1,40}$`。
 2. `dependsOn` 引用的 key 必须存在，且不能自依赖。
 3. 无环（DFS 白/灰/黑标记），否则 400。
-4. `agentId` 必须属于同一工作区。
+4. `agentId` 必须属于同一工作区；`maxRetries` 若提供必须在 0-5 之间。
+5. 发起变量 key 唯一、仅含字母/数字/下划线且不能以数字开头；选项型变量的默认值必须属于选项。
 
 ### 1.3 `runs`（节点执行实例）
 
@@ -98,7 +101,7 @@ for 节点 in 模板顺序:
 
 ### 2.3 失败与重试
 
-- `outcome.status != finished` 且 `stop_reason == "interrupted" | "lease_expired"` 且 `retry_count < 2`：复制同 `stage_key` 的 run（`retry_count+1`、`retry_of=旧 run`），重新 dispatch，任务保持 `in_progress`。
+- `outcome.status != finished` 且 `stop_reason == "interrupted"` 且 `retry_count < stage.maxRetries`（缺省 2，范围 0-5）：复制同 `stage_key` 的 run（`retry_count+1`、`retry_of=旧 run`），重新 dispatch，任务保持 `in_progress`。
 - 重试耗尽或其它失败：该 run 置 `failed`；**取消同任务其余 running 的 run**；`move_task(blocked)`，理由带节点 key。
 - `cancelled`：取消其余 run 并 `blocked`。
 - **过期 Run 保护**：若该节点的最新 Run 不是当前 Run（被重试、跳过或 rewind 覆盖，或已被删除），结束回调直接忽略，不再推进状态。
@@ -124,7 +127,27 @@ for 节点 in 模板顺序:
 
 > 所有删除都保留 `task_events` 历史；节点状态始终以「最新 Run」为准。
 
-## 3. `when` 表达式（声明式）
+## 3. 发起变量
+
+工作流可定义一组发起变量，随模板保存；每次发起实际填写值持久化到 `tasks.workflow_inputs`。
+
+```jsonc
+{
+  "key": "goal",
+  "label": "目标",
+  "description": "这次要完成什么",
+  "required": true,
+  "default": null,
+  "options": []
+}
+```
+
+- 发起接口提交 `variables: { goal: "登录" }`；后端补默认值、校验必填/选项/未知 key。
+- 任务标题、内容、标签和节点的 `promptAppend` 支持 `{{key}}` 替换。
+- `when` 的 `var:key=value` 优先读取结构化变量；旧任务回退解析正文。
+- 变量值按字符串持久化，便于条件判断和模板渲染。
+
+## 4. `when` 表达式（声明式）
 
 只允许以下三种，求值失败按 false 处理并写事件：
 
@@ -136,7 +159,7 @@ for 节点 in 模板顺序:
 
 不支持布尔组合与函数调用（v1）。
 
-## 4. 分支与产物
+## 5. 分支与产物
 
 - 分支：`fux/task-<id 前 8 位>/<nodeKey>`（`/` 分隔，天然按任务分组）。
 - 起点：
@@ -163,7 +186,7 @@ for 节点 in 模板顺序:
   摘要: …
 ```
 
-## 5. 调度与租约
+## 6. 调度与租约
 
 | 项                 | 规则                                                                                    |
 | ------------------ | --------------------------------------------------------------------------------------- |
@@ -174,16 +197,16 @@ for 节点 in 模板顺序:
 | 任务级租约         | 仅非工作流任务使用（兼容路径）                                                          |
 | 质量阀             | 按 run 判定；熔断 → 取消同任务其余 run → `blocked`，事件 `watchdog.*` 带 `stageKey`     |
 
-## 6. 接口
+## 7. 接口
 
 | 方法   | 路径                            | 说明                                                                        |
 | ------ | ------------------------------- | --------------------------------------------------------------------------- |
 | GET    | `/workspaces/{id}/workflows`    | 列表（含节点数）                                                            |
-| POST   | `/workspaces/{id}/workflows`    | 创建（admin）                                                               |
-| GET    | `/workflows/{id}`               | 详情                                                                        |
-| PATCH  | `/workflows/{id}`               | 更新（admin）                                                               |
+| POST   | `/workspaces/{id}/workflows`    | 创建（admin，含 `variables`）                                                |
+| GET    | `/workflows/{id}`               | 详情（含变量与节点定义）                                                    |
+| PATCH  | `/workflows/{id}`               | 更新（admin，提交完整 `variables + stages`）                                |
 | DELETE | `/workflows/{id}`               | 删除（admin）                                                               |
-| POST   | `/workflows/{id}/run`           | `{ title, content, projectId?, typeId?, priority?, tags? }` → 建 ready 任务 |
+| POST   | `/workflows/{id}/run`           | `{ title, content, projectId?, typeId?, priority?, tags?, variables? }` → 建 ready 任务 |
 | GET    | `/tasks/{id}`                   | 增加 `workflow`、`deliveries` 字段                                          |
 | POST   | `/tasks/{id}/deliveries`        | 登记/回填交付 PR：`{ deliveryId, prUrl }`                                   |
 | POST   | `/tasks/{id}/check-merge`       | 逐条检测全部交付                                                            |
@@ -192,9 +215,9 @@ for 节点 in 模板顺序:
 
 `move_task` 的 T5 审批条件扩展：有 `deliveries` 时要求**全部** `pr_state='merged'`（或 `manualConfirm`）。
 
-## 7. 前端
+## 8. 前端
 
-- **工作流页** `/ws/:wsId/workflows`：模板列表、画布式创建/编辑（拖拽节点、连线建立依赖、自动布局；节点属性面板编辑 key/名称/智能体/项目/`when`/追加提示词）、顶部「一句话发起」（标题 + 内容 + 目标项目）。
+- **工作流页** `/ws/:wsId/workflows`：最近实例、模板复制、模板列表、画布式创建/编辑（拖拽节点、连线建立依赖、自动布局；节点属性面板编辑 key/名称/智能体/项目/`when`/重试上限/追加提示词；侧栏维护发起变量）、动态「一句话发起」（标题 + 内容 + 变量 + 目标项目 + 标签 + 优先级）。
 - **看板**：任务卡显示工作流名 chip（`workflowName` 由前端用模板列表映射）。
 - **任务详情**：有 `workflowId` 时多一个「流程」页签：
   - 按层展示节点（依赖 → 下游），每节点 chip：`pending / running / succeeded / failed / skipped`；
@@ -203,10 +226,11 @@ for 节点 in 模板顺序:
 - **审核侧栏**：按项目列出 `deliveries`（分支、PR 链接输入、状态、检测合并）；全部 merged 才启用「批准交付」。
 - 删除团队页与所有 team 引用。
 
-## 8. 迁移与兼容
+## 9. 迁移与兼容
 
 - `0002_drop_teams.sql`：删除 `team_members`、`agent_teams`、`tasks.assignee_team_id`、`runs.team_id`。
 - `0003_workflows.sql`：建 `workflows` / `deliveries`；`tasks.workflow_id`；`runs` 新增 `project_id/branch/head_sha/stage_key/lease_expires_at`。
 - `0004_drop_max_parallel.sql`：删除 `workflows.max_parallel`（并行度改由 DAG 结构决定）。
+- `0006_workflow_inputs.sql`：新增 `workflows.variables` 与 `tasks.workflow_inputs`，支持参数化发起。
 - 非工作流任务完全走原路径：单 Run、任务级租约、`tasks.pr_url` 交付字段保持不变。
 - 工作流任务的 `tasks.branch` 仅用于主项目汇点展示；真实分支在 `runs.branch` 与 `deliveries.branch`。

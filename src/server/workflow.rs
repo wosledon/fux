@@ -10,8 +10,24 @@ use crate::server::gitflow;
 use crate::server::models::{Delivery, Project, Run, Task, Workflow};
 use crate::server::scheduler;
 use serde::{Deserialize, Serialize};
-use serde_json::json;
+use serde_json::{Value, json};
 use std::collections::{HashMap, HashSet};
+
+/// 工作流发起变量：在模板中定义，发起实例时填写并持久化到任务。
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct WorkflowVariable {
+    pub key: String,
+    pub label: String,
+    #[serde(default)]
+    pub description: Option<String>,
+    #[serde(default)]
+    pub required: bool,
+    #[serde(default)]
+    pub default: Option<Value>,
+    #[serde(default)]
+    pub options: Vec<String>,
+}
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -27,11 +43,24 @@ pub struct StageSpec {
     pub depends_on: Vec<String>,
     #[serde(default)]
     pub when: Option<String>,
+    /// 节点级突然中断重试上限；缺省沿用全局 2 次。
+    #[serde(default)]
+    pub max_retries: Option<i64>,
     /// 画布坐标（仅展示/编辑用）
     #[serde(default)]
     pub x: Option<f64>,
     #[serde(default)]
     pub y: Option<f64>,
+}
+
+impl StageSpec {
+    pub fn retry_limit(&self) -> i64 {
+        self.max_retries.unwrap_or(2).clamp(0, 5)
+    }
+}
+
+pub fn should_retry_interrupted(stage: &StageSpec, retry_count: i64, stop_reason: &str) -> bool {
+    stop_reason == "interrupted" && retry_count < stage.retry_limit()
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -98,6 +127,11 @@ pub fn validate(stages: &[StageSpec]) -> Result<(), String> {
         if s.agent_id.trim().is_empty() {
             return Err(format!("节点「{}」未绑定智能体", s.name));
         }
+        if let Some(n) = s.max_retries {
+            if !(0..=5).contains(&n) {
+                return Err(format!("节点「{}」重试次数必须在 0-5 之间", s.key));
+            }
+        }
     }
     for s in stages {
         for d in &s.depends_on {
@@ -137,6 +171,132 @@ pub fn validate(stages: &[StageSpec]) -> Result<(), String> {
         dfs(&s.key, &map, &mut color)?;
     }
     Ok(())
+}
+
+fn valid_variable_key(key: &str) -> bool {
+    !key.is_empty()
+        && key.len() <= 40
+        && key.chars().all(|c| c.is_ascii_alphanumeric() || c == '_')
+        && !key.starts_with(|c: char| c.is_ascii_digit())
+}
+
+fn value_text(v: &Value) -> String {
+    match v {
+        Value::String(s) => s.clone(),
+        Value::Null => String::new(),
+        other => other.to_string(),
+    }
+}
+
+/// 保存前校验工作流发起变量。
+pub fn validate_variables(variables: &[WorkflowVariable]) -> Result<(), String> {
+    let mut keys = HashSet::new();
+    for v in variables {
+        if !valid_variable_key(&v.key) {
+            return Err(format!(
+                "变量 key 非法（字母/数字/下划线，不能以数字开头，1-40 字符）：{}",
+                v.key
+            ));
+        }
+        if !keys.insert(v.key.clone()) {
+            return Err(format!("变量 key 重复：{}", v.key));
+        }
+        if v.label.trim().is_empty() {
+            return Err(format!("变量「{}」缺少显示名称", v.key));
+        }
+        if !v.options.is_empty() {
+            let mut seen = HashSet::new();
+            for option in &v.options {
+                if option.trim().is_empty() {
+                    return Err(format!("变量「{}」包含空选项", v.key));
+                }
+                if !seen.insert(option.clone()) {
+                    return Err(format!("变量「{}」包含重复选项：{}", v.key, option));
+                }
+            }
+            if let Some(default) = &v.default {
+                let default = value_text(default);
+                if !default.trim().is_empty() && !v.options.iter().any(|o| o == &default) {
+                    return Err(format!("变量「{}」的默认值不在选项内", v.key));
+                }
+            }
+        }
+    }
+    Ok(())
+}
+
+pub fn parse_variables(wf: &Workflow) -> ApiResult<Vec<WorkflowVariable>> {
+    serde_json::from_str(&wf.variables)
+        .map_err(|e| ApiError::bad_request(format!("工作流变量定义损坏：{e}")))
+}
+
+/// 合并默认值、校验必填/选项，并统一持久化为字符串值。
+pub fn resolve_inputs(
+    variables: &[WorkflowVariable],
+    provided: Option<&Value>,
+) -> ApiResult<serde_json::Map<String, Value>> {
+    let provided = match provided {
+        None => serde_json::Map::new(),
+        Some(Value::Object(map)) => map.clone(),
+        Some(_) => return Err(ApiError::bad_request("工作流变量必须是对象")),
+    };
+    let known: HashSet<&str> = variables.iter().map(|v| v.key.as_str()).collect();
+    for key in provided.keys() {
+        if !known.contains(key.as_str()) {
+            return Err(ApiError::bad_request(format!("未知的工作流变量：{key}")));
+        }
+    }
+
+    let mut out = serde_json::Map::new();
+    for variable in variables {
+        let raw = provided.get(&variable.key).or(variable.default.as_ref());
+        let value = raw.map(value_text).unwrap_or_default();
+        if variable.required && value.trim().is_empty() {
+            return Err(ApiError::bad_request(format!(
+                "请填写工作流变量「{}」",
+                variable.label
+            )));
+        }
+        if !variable.options.is_empty()
+            && !value.is_empty()
+            && !variable.options.iter().any(|o| o == &value)
+        {
+            return Err(ApiError::bad_request(format!(
+                "工作流变量「{}」的值不在选项内",
+                variable.label
+            )));
+        }
+        if !value.is_empty() {
+            out.insert(variable.key.clone(), Value::String(value));
+        }
+    }
+    Ok(out)
+}
+
+pub fn inputs_of(task: &Task) -> serde_json::Map<String, Value> {
+    serde_json::from_str(&task.workflow_inputs).unwrap_or_default()
+}
+
+/// 渲染 `{{变量名}}`；未提供的变量保持原样，变量值不会被二次展开。
+pub fn render_template(template: &str, inputs: &serde_json::Map<String, Value>) -> String {
+    let mut out = String::with_capacity(template.len());
+    let mut rest = template;
+    while let Some(start) = rest.find("{{") {
+        out.push_str(&rest[..start]);
+        let after = &rest[start + 2..];
+        let Some(end) = after.find("}}") else {
+            out.push_str(&rest[start..]);
+            return out;
+        };
+        let key = &after[..end];
+        match inputs.get(key) {
+            Some(value) => out.push_str(&value_text(value)),
+            None => out.push_str(&rest[start..start + 2 + end + 2]),
+        }
+        rest = &after[end + 2..];
+    }
+    out.push_str(rest);
+    out
 }
 
 pub fn parse_stages(wf: &Workflow) -> ApiResult<Vec<StageSpec>> {
@@ -255,10 +415,15 @@ async fn eval_when(
     }
     if let Some(kv) = expr.strip_prefix("var:") {
         if let Some((k, v)) = kv.split_once('=') {
+            let key = k.trim();
+            let expected = v.trim();
+            if let Some(actual) = inputs_of(task).get(key) {
+                return value_text(actual) == expected;
+            }
+            // 兼容迁移前从任务正文解析变量的旧任务。
             return task.content.lines().any(|line| {
                 let line = line.trim();
-                line == format!("{}: {}", k.trim(), v.trim())
-                    || line == format!("{}={}", k.trim(), v.trim())
+                line == format!("{key}: {expected}") || line == format!("{key}={expected}")
             });
         }
         return false;
@@ -585,10 +750,10 @@ pub async fn finish_stage(
             .await?;
         }
         _ => {
-            // 突然中断：同节点自动重试 ≤ 2 次（续接会话 + 摘要由 dispatch_inner 统一处理）
-            if outcome.stop_reason == "interrupted" && run.retry_count < 2 {
+            // 突然中断：按节点策略重试（缺省 ≤ 2 次，续接会话 + 摘要由 dispatch_inner 统一处理）
+            if should_retry_interrupted(&stage, run.retry_count, &outcome.stop_reason) {
                 events::append(&state.db, &state.broadcast, &task.id, "watchdog.interrupted", "system", Some(&run.id),
-                    json!({ "error": outcome.error, "retry": run.retry_count + 1, "stageKey": stage.key })).await?;
+                    json!({ "error": outcome.error, "retry": run.retry_count + 1, "maxRetries": stage.retry_limit(), "stageKey": stage.key })).await?;
                 let new_run = crate::new_id();
                 sqlx::query(
                     "INSERT INTO runs (id, task_id, agent_id, node_id, stage, stage_key, project_id, branch, lease_expires_at, retry_count, retry_of, status) VALUES (?,?,?,?,?,?,?,?,?,?,?, 'running')",
@@ -946,6 +1111,7 @@ mod tests {
             prompt_append: None,
             depends_on: deps.iter().map(|d| d.to_string()).collect(),
             when: None,
+            max_retries: None,
             x: None,
             y: None,
         }
@@ -959,6 +1125,55 @@ mod tests {
         assert!(validate(&[s("a", &[]), s("a", &[])]).is_err());
         assert!(validate(&[s("a", &["missing"])]).is_err());
         assert!(validate(&[s("a", &["a"])]).is_err());
+    }
+
+    #[test]
+    fn variables_render_and_validate() {
+        let variables = vec![
+            WorkflowVariable {
+                key: "goal".into(),
+                label: "目标".into(),
+                description: None,
+                required: true,
+                default: None,
+                options: vec![],
+            },
+            WorkflowVariable {
+                key: "mode".into(),
+                label: "模式".into(),
+                description: None,
+                required: false,
+                default: Some(Value::String("fast".into())),
+                options: vec!["fast".into(), "safe".into()],
+            },
+        ];
+        assert!(validate_variables(&variables).is_ok());
+        let inputs =
+            resolve_inputs(&variables, Some(&json!({ "goal": "登录", "mode": "safe" }))).unwrap();
+        assert_eq!(
+            render_template("实现{{goal}}（{{mode}}）", &inputs),
+            "实现登录（safe）"
+        );
+        assert!(resolve_inputs(&variables, Some(&json!({}))).is_err());
+        assert!(resolve_inputs(&variables, Some(&json!({ "goal": "x", "unknown": "y" }))).is_err());
+        assert!(
+            resolve_inputs(&variables, Some(&json!({ "goal": "x", "mode": "invalid" }))).is_err()
+        );
+    }
+
+    #[test]
+    fn stage_retry_policy_is_bounded() {
+        let mut stage = s("a", &[]);
+        assert_eq!(stage.retry_limit(), 2);
+        stage.max_retries = Some(0);
+        assert_eq!(stage.retry_limit(), 0);
+        assert!(!should_retry_interrupted(&stage, 0, "interrupted"));
+        stage.max_retries = Some(1);
+        assert!(should_retry_interrupted(&stage, 0, "interrupted"));
+        assert!(!should_retry_interrupted(&stage, 1, "interrupted"));
+        assert!(!should_retry_interrupted(&stage, 0, "failed"));
+        stage.max_retries = Some(6);
+        assert!(validate(&[stage]).is_err());
     }
 
     #[test]

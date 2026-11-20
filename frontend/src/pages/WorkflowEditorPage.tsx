@@ -2,20 +2,20 @@ import { useEffect, useRef, useState } from 'react'
 import { useNavigate, useOutletContext, useParams } from 'react-router-dom'
 import { useQuery, useQueryClient } from '@tanstack/react-query'
 import {
-  Alert, Box, Button, Chip, CircularProgress, Divider, IconButton, MenuItem, Stack,
+  Alert, Box, Button, Checkbox, Chip, CircularProgress, Divider, FormControlLabel, IconButton, MenuItem, Stack,
   TextField, Tooltip, Typography,
 } from '@mui/material'
 import ArrowBackIcon from '@mui/icons-material/ArrowBack'
 import SaveOutlinedIcon from '@mui/icons-material/SaveOutlined'
 import AddIcon from '@mui/icons-material/Add'
-import { get, post, patch, parseJson, type Workflow, type WorkflowStage, type Agent, type Project } from '../api'
+import { get, post, patch, parseJson, type Workflow, type WorkflowStage, type WorkflowVariable, type Agent, type Project } from '../api'
 import type { WsCtx } from './WorkspaceLayout'
 import { useConfirm, useToast } from '../ui'
 import WorkflowCanvasEditor from './WorkflowCanvasEditor'
 import { normalizeStages, reaches } from './WorkflowCanvas'
 
-const snap = (name: string, description: string, stages: WorkflowStage[]) =>
-  JSON.stringify({ name, description, stages: normalizeStages(stages) })
+const snap = (name: string, description: string, variables: WorkflowVariable[], stages: WorkflowStage[]) =>
+  JSON.stringify({ name, description, variables, stages: normalizeStages(stages) })
 
 export default function WorkflowEditorPage() {
   const { wsId, role } = useOutletContext<WsCtx>()
@@ -29,6 +29,7 @@ export default function WorkflowEditorPage() {
 
   const [name, setName] = useState('')
   const [description, setDescription] = useState('')
+  const [variables, setVariables] = useState<WorkflowVariable[]>([])
   const [stages, setStages] = useState<WorkflowStage[]>([])
   const [selected, setSelected] = useState<string | null>(null)
   const [initializedFor, setInitializedFor] = useState<string | null>(null)
@@ -59,21 +60,25 @@ export default function WorkflowEditorPage() {
     if (isNew && agents.length === 0) return
     const initName = isNew ? '' : (workflow?.name || '')
     const initDesc = isNew ? '' : (workflow?.description || '')
+    const initVariables = isNew
+      ? []
+      : parseJson<WorkflowVariable[]>(workflow?.variables, [])
     const initStages: WorkflowStage[] = isNew
       ? (agents.length > 0
-          ? [{ key: 'node-1', name: '节点 1', agentId: agents[0].id, dependsOn: [], x: 48, y: 48 }]
+          ? [{ key: 'node-1', name: '节点 1', agentId: agents[0].id, dependsOn: [], maxRetries: 2, x: 48, y: 48 }]
           : [])
       : normalizeStages(parseJson<WorkflowStage[]>(workflow?.stages, []))
     setName(initName)
     setDescription(initDesc)
+    setVariables(initVariables)
     setStages(initStages)
     setSelected(null)
-    baselineRef.current = snap(initName, initDesc, initStages)
+    baselineRef.current = snap(initName, initDesc, initVariables, initStages)
     setInitializedFor(editorKey)
   }, [initializedFor, editorKey, isNew, workflow, agents, agentsFetched])
 
   const sel = stages.find(s => s.key === selected) || null
-  const dirty = initializedFor === editorKey && snap(name, description, stages) !== baselineRef.current
+  const dirty = initializedFor === editorKey && snap(name, description, variables, stages) !== baselineRef.current
 
   const issues: string[] = []
   const keyCount = new Map<string, number>()
@@ -82,6 +87,16 @@ export default function WorkflowEditorPage() {
     if (!/^[a-z0-9-]{1,40}$/.test(s.key)) issues.push(`节点「${s.name || s.key}」的 key 不合法（小写字母/数字/连字符）`)
     else if ((keyCount.get(s.key) || 0) > 1) issues.push(`key 重复：${s.key}`)
     if (!s.agentId) issues.push(`节点「${s.name || s.key}」未绑定智能体`)
+    if (s.maxRetries !== undefined && (!Number.isInteger(s.maxRetries) || s.maxRetries < 0 || s.maxRetries > 5)) {
+      issues.push(`节点「${s.name || s.key}」重试次数必须在 0-5 之间`)
+    }
+  }
+  const variableKeys = new Set<string>()
+  for (const v of variables) {
+    if (!/^[A-Za-z_][A-Za-z0-9_]{0,39}$/.test(v.key)) issues.push(`变量「${v.label || v.key}」的 key 不合法`)
+    else if (variableKeys.has(v.key)) issues.push(`变量 key 重复：${v.key}`)
+    else variableKeys.add(v.key)
+    if (!v.label.trim()) issues.push(`变量「${v.key}」缺少显示名称`)
   }
   if (stages.length === 0) issues.push('工作流至少需要一个节点')
 
@@ -115,7 +130,7 @@ export default function WorkflowEditorPage() {
     setBusy(true)
     setErr('')
     try {
-      const body = { name: name.trim(), description, stages: normalizeStages(stages) }
+      const body = { name: name.trim(), description, variables, stages: normalizeStages(stages) }
       if (isNew) await post(`/workspaces/${wsId}/workflows`, body)
       else await patch(`/workflows/${wfId}`, body)
       await qc.invalidateQueries({ queryKey: ['workflows', wsId] })
@@ -173,6 +188,7 @@ export default function WorkflowEditorPage() {
         <TextField size="small" label="说明" value={description} onChange={e => setDescription(e.target.value)}
           sx={{ flexGrow: 1, minWidth: { xs: '100%', sm: 240 } }} />
         <Chip size="small" variant="outlined" label={`${stages.length} 节点`} />
+        {variables.length > 0 && <Chip size="small" variant="outlined" label={`${variables.length} 变量`} />}
         {dirty && <Chip size="small" color="warning" label="未保存" />}
         <Button variant="contained" startIcon={<SaveOutlinedIcon />} onClick={() => void save()}
           disabled={busy || !name.trim() || issues.length > 0}>
@@ -201,6 +217,12 @@ export default function WorkflowEditorPage() {
               <Typography variant="body2">点「连线」后依次点两个节点建立依赖（先 → 后），点击连线可删除。</Typography>
               <Typography variant="body2">依赖满足的节点会<strong>自动并行</strong>执行，无需配置并行度。</Typography>
               <Divider />
+              <Typography variant="overline">发起变量</Typography>
+              <Typography variant="caption" color="text.secondary">
+                在标题、内容、标签或节点提示词中使用 {'{{变量名}}'}。
+              </Typography>
+              <VariableEditor variables={variables} onChange={setVariables} />
+              <Divider />
               <Typography variant="overline">节点列表</Typography>
               <Stack spacing={0.75}>
                 {stages.map(s => (
@@ -219,7 +241,8 @@ export default function WorkflowEditorPage() {
               <Button size="small" startIcon={<AddIcon />} onClick={() => {
                 const key = nextNodeKey(stages)
                 setStages(prev => [...prev, {
-                  key, name: `节点 ${prev.length + 1}`, agentId: agents[0]?.id || '', dependsOn: [], x: 48, y: 48,
+                  key, name: `节点 ${prev.length + 1}`, agentId: agents[0]?.id || '',
+                  dependsOn: [], maxRetries: 2, x: 48, y: 48,
                 }])
                 setSelected(key)
               }}>添加节点</Button>
@@ -242,7 +265,10 @@ export default function WorkflowEditorPage() {
               </TextField>
               <TextField size="small" label="跳过条件（tag:x / path:x / var:k=v）" value={sel.when || ''}
                 onChange={e => update(sel.key, { when: e.target.value || undefined })} />
-              <TextField size="small" label="追加提示词" value={sel.promptAppend || ''} multiline minRows={3}
+              <TextField size="small" type="number" label="中断重试上限（0-5）" value={sel.maxRetries ?? 2}
+                slotProps={{ htmlInput: { min: 0, max: 5, step: 1 } }}
+                onChange={e => update(sel.key, { maxRetries: e.target.value === '' ? undefined : Number(e.target.value) })} />
+              <TextField size="small" label="追加提示词（支持 {{变量名}}）" value={sel.promptAppend || ''} multiline minRows={3}
                 onChange={e => update(sel.key, { promptAppend: e.target.value || undefined })} />
               <Divider />
               <Typography variant="caption" color="text.secondary">上游依赖</Typography>
@@ -266,6 +292,57 @@ export default function WorkflowEditorPage() {
         </Box>
       </Box>
     </Box>
+  )
+}
+
+function VariableEditor({ variables, onChange }: {
+  variables: WorkflowVariable[]
+  onChange: (next: WorkflowVariable[]) => void
+}) {
+  const update = (index: number, patch: Partial<WorkflowVariable>) => {
+    onChange(variables.map((v, i) => i === index ? { ...v, ...patch } : v))
+  }
+  return (
+    <Stack spacing={1.25}>
+      {variables.map((v, index) => (
+        <Box key={`${index}-${v.key}`} sx={{ p: 1.25, border: '1px solid', borderColor: 'divider', borderRadius: 1.25 }}>
+          <Stack spacing={1.25}>
+            <Box sx={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 1 }}>
+              <TextField size="small" label="key" value={v.key}
+                onChange={e => update(index, { key: e.target.value })} />
+              <TextField size="small" label="显示名称" value={v.label}
+                onChange={e => update(index, { label: e.target.value })} />
+            </Box>
+            <TextField size="small" label="说明（可选）" value={v.description || ''}
+              onChange={e => update(index, { description: e.target.value || undefined })} />
+            <TextField size="small" label="选项（逗号分隔，可选）" value={(v.options || []).join(', ')}
+              onChange={e => update(index, {
+                options: e.target.value.split(',').map(x => x.trim()).filter(Boolean),
+              })} />
+            {(v.options || []).length > 0 ? (
+              <TextField size="small" select label="默认值（可选）" value={v.default || ''}
+                onChange={e => update(index, { default: e.target.value || undefined })}>
+                <MenuItem value="">无默认值</MenuItem>
+                {v.options?.map(option => <MenuItem key={option} value={option}>{option}</MenuItem>)}
+              </TextField>
+            ) : (
+              <TextField size="small" label="默认值（可选）" value={v.default || ''}
+                onChange={e => update(index, { default: e.target.value || undefined })} />
+            )}
+            <Box sx={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
+              <FormControlLabel
+                control={<Checkbox size="small" checked={!!v.required} onChange={e => update(index, { required: e.target.checked })} />}
+                label="必填" />
+              <Button size="small" color="error" onClick={() => onChange(variables.filter((_, i) => i !== index))}>删除</Button>
+            </Box>
+          </Stack>
+        </Box>
+      ))}
+      <Button size="small" startIcon={<AddIcon />} onClick={() => onChange([
+        ...variables,
+        { key: `var_${variables.length + 1}`, label: `变量 ${variables.length + 1}`, required: false },
+      ])}>添加变量</Button>
+    </Stack>
   )
 }
 

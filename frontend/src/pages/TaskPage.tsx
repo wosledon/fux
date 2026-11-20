@@ -572,6 +572,7 @@ export default function TaskPage() {
           projects={projects}
           agents={agents}
           taskStatus={task.status}
+          workflowInputs={task.workflowInputs}
           isAdmin={isAdmin}
           onRewind={(key) => action(() => post(`/tasks/${taskId}/rewind`, { fromStage: key }), `已重置节点「${key}」及其下游`)}
           onSkip={(key) => action(() => post(`/tasks/${taskId}/stages/${key}/skip`), `已跳过节点「${key}」`)}
@@ -1104,11 +1105,12 @@ function DeliveryRow({ d, projectName, onSaved }: { d: Delivery; projectName: st
   )
 }
 
-function WorkflowFlowPanel({ workflow, runs, projects, agents, taskStatus, isAdmin, onRewind, onSkip }: {
-  workflow: Workflow; runs: Run[]; projects: Project[]; agents: Agent[]; taskStatus: string; isAdmin: boolean
+function WorkflowFlowPanel({ workflow, runs, projects, agents, taskStatus, workflowInputs, isAdmin, onRewind, onSkip }: {
+  workflow: Workflow; runs: Run[]; projects: Project[]; agents: Agent[]; taskStatus: string; workflowInputs: string; isAdmin: boolean
   onRewind: (key: string) => void; onSkip: (key: string) => void
 }) {
   const stages = useMemo(() => autoLayout(parseJson<WorkflowStage[]>(workflow.stages, [])), [workflow.stages])
+  const inputs = useMemo(() => parseJson<Record<string, string>>(workflowInputs, {}), [workflowInputs])
   const { latest, statusOf, metaOf } = useStageStatus(runs)
   const levelOf = (s: WorkflowStage, depth = 0): number => {
     if (depth > 20 || s.dependsOn.length === 0) return 0
@@ -1128,6 +1130,13 @@ function WorkflowFlowPanel({ workflow, runs, projects, agents, taskStatus, isAdm
       <Typography variant="caption" color="text.secondary" display="block" sx={{ mb: 1.5 }}>
         节点依赖满足即自动执行；绿色为已完成，紫色为执行中，红色为失败。
       </Typography>
+      {Object.keys(inputs).length > 0 && (
+        <Box sx={{ display: 'flex', gap: 0.75, flexWrap: 'wrap', mb: 1.5 }}>
+          {Object.entries(inputs).map(([key, value]) => (
+            <Chip key={key} size="small" variant="outlined" label={`${key}: ${value}`} />
+          ))}
+        </Box>
+      )}
       <Box sx={{ height: 320, mb: 2.5, border: '1px solid', borderColor: 'divider', borderRadius: 1.25, overflow: 'hidden' }}>
         <WorkflowCanvas readonly stages={stages} agents={agents} projects={projects} selected={null}
           onChange={() => {}} onSelect={() => {}} statusOf={statusOf} metaOf={metaOf} />
@@ -1150,7 +1159,7 @@ function WorkflowFlowPanel({ workflow, runs, projects, agents, taskStatus, isAdm
                       项目：{projects.find(p => p.id === s.projectId)?.name || '继承主项目'} · 智能体：{agents.find(a => a.id === s.agentId)?.name || s.agentId.slice(0, 8)}
                     </Typography>
                     <Typography variant="caption" color="text.secondary" display="block">
-                      {s.dependsOn.length ? `依赖：${s.dependsOn.join(', ')}` : '入口节点'}{s.when ? ` · 条件：${s.when}` : ''}
+                      {s.dependsOn.length ? `依赖：${s.dependsOn.join(', ')}` : '入口节点'}{s.when ? ` · 条件：${s.when}` : ''} · 重试上限 {s.maxRetries ?? 2}
                     </Typography>
                     {r && <Typography variant="caption" color="text.secondary" display="block">
                       {r.turnCount} 轮{r.retryCount > 0 ? ` · 重试 #${r.retryCount}` : ''}{r.headSha ? ` · ${r.headSha.slice(0, 8)}` : ''}

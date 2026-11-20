@@ -596,17 +596,24 @@ async fn workflow_dag_run_and_rewind() {
     .await;
     assert_eq!(s, 400, "循环依赖应被拒绝");
 
-    // 两节点串行（同项目）
+    // 两节点串行（同项目）+ 发起变量 + 节点级重试
     let (s, wf) = call(&app, auth(test::TestRequest::post().uri(&format!("/api/v1/workspaces/{ws}/workflows"))
-        .set_json(json!({ "name": "设计→开发", "stages": [
-            { "key": "design", "name": "设计", "agentId": aid, "projectId": pid },
-            { "key": "dev", "name": "开发", "agentId": aid, "projectId": pid, "dependsOn": ["design"] }
-        ] })), &owner)).await;
+        .set_json(json!({
+            "name": "设计→开发",
+            "variables": [
+                { "key": "goal", "label": "目标", "required": true },
+                { "key": "mode", "label": "模式", "default": "fast", "options": ["fast", "safe"] }
+            ],
+            "stages": [
+                { "key": "design", "name": "设计", "agentId": aid, "projectId": pid, "maxRetries": 1 },
+                { "key": "dev", "name": "开发", "agentId": aid, "projectId": pid, "dependsOn": ["design"], "maxRetries": 0 }
+            ]
+        })), &owner)).await;
     assert_eq!(s, 200, "{wf}");
     let wfid = wf["id"].as_str().unwrap().to_string();
 
-    // 入口发起 → 直接 ready
-    let (s, task) = call(
+    // 必填变量缺失时必须拒绝
+    let (s, _) = call(
         &app,
         auth(
             test::TestRequest::post()
@@ -616,9 +623,34 @@ async fn workflow_dag_run_and_rewind() {
         ),
     )
     .await;
+    assert_eq!(s, 400, "缺少必填变量应被拒绝");
+
+    // 入口发起 → 变量渲染后直接 ready
+    let (s, task) = call(
+        &app,
+        auth(
+            test::TestRequest::post()
+                .uri(&format!("/api/v1/workflows/{wfid}/run"))
+                .set_json(json!({
+                    "title": "实现 {{goal}}",
+                    "content": "模式：{{mode}}",
+                    "tags": ["wf-{{mode}}"],
+                    "variables": { "goal": "登录" }
+                })),
+            &owner,
+        ),
+    )
+    .await;
     assert_eq!(s, 200, "{task}");
     let tid = task["id"].as_str().unwrap().to_string();
     assert_eq!(task["status"], "ready");
+    assert_eq!(task["title"], "实现 登录");
+    assert_eq!(task["content"], "模式：fast");
+    assert_eq!(task["tags"].as_str(), Some(r#"["wf-fast"]"#));
+    let saved_inputs: serde_json::Value =
+        serde_json::from_str(task["workflowInputs"].as_str().unwrap()).unwrap();
+    assert_eq!(saved_inputs["goal"], "登录");
+    assert_eq!(saved_inputs["mode"], "fast");
 
     scheduler::spawn(ctx.state.clone());
 

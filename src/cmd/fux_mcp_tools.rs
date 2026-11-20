@@ -71,9 +71,25 @@ fn tool(name: &str, desc: &str, props: Value, required: &[&str]) -> Value {
 }
 
 pub fn tools() -> Value {
+    let variables_schema = json!({
+        "type": "array",
+        "description": "发起变量；可在任务标题、内容、标签和节点追加提示词中用 {{key}} 引用",
+        "items": {
+            "type": "object",
+            "properties": {
+                "key": p_str("变量 key，字母/数字/下划线"),
+                "label": p_str("显示名称"),
+                "description": p_str("补充说明"),
+                "required": json!({ "type": "boolean", "description": "是否必填" }),
+                "default": json!({ "description": "默认值（字符串）" }),
+                "options": p_str_arr("可选值列表"),
+            },
+            "required": ["key", "label"],
+        }
+    });
     let stages_schema = json!({
         "type": "array",
-        "description": "节点数组。每个节点绑定智能体，可选执行项目、追加提示词、依赖与跳过条件；依赖满足即并行",
+        "description": "节点数组。每个节点绑定智能体，可选执行项目、追加提示词、依赖、跳过条件与重试次数；依赖满足即并行",
         "items": {
             "type": "object",
             "properties": {
@@ -84,6 +100,7 @@ pub fn tools() -> Value {
                 "promptAppend": p_str("追加到该节点的提示词"),
                 "dependsOn": p_str_arr("依赖的上游节点 key 列表"),
                 "when": p_str("跳过条件，如 tag:ui / path:docs/ / var:mode=fast"),
+                "maxRetries": p_int("突然中断重试上限，0-5，缺省 2"),
                 "x": json!({ "type": "number", "description": "画布 x 坐标（可选）" }),
                 "y": json!({ "type": "number", "description": "画布 y 坐标（可选）" }),
             },
@@ -243,6 +260,7 @@ pub fn tools() -> Value {
             json!({
                 "name": p_str("工作流名称"),
                 "description": p_str("说明"),
+                "variables": variables_schema.clone(),
                 "stages": stages_schema.clone(),
             }),
             &["name", "stages"]
@@ -254,6 +272,7 @@ pub fn tools() -> Value {
                 "workflowId": p_str("工作流 ID"),
                 "name": p_str("工作流名称"),
                 "description": p_str("说明"),
+                "variables": variables_schema,
                 "stages": stages_schema,
             }),
             &["workflowId", "name", "stages"]
@@ -275,6 +294,7 @@ pub fn tools() -> Value {
                 "typeId": p_str("任务类型 ID"),
                 "priority": p_int("优先级"),
                 "tags": p_str_arr("标签列表"),
+                "variables": json!({ "type": "object", "description": "工作流发起变量键值" }),
             }),
             &["workflowId", "title"]
         ),
@@ -485,11 +505,23 @@ pub async fn call_tool(name: &str, args: Value) -> Result<Value> {
                 "maxConcurrent": a["maxConcurrent"], "matchTags": a["matchTags"],
                 "skillIds": a["skillIds"], "mcpServers": a["mcpServers"],
             })).collect();
-            let compact_workflows: Vec<Value> = workflows.as_array().into_iter().flatten().map(|w| {
-                let stage_keys: Vec<Value> = serde_json::from_str::<Vec<Value>>(w["stages"].as_str().unwrap_or("[]"))
-                    .unwrap_or_default().into_iter().filter_map(|s| s.get("key").cloned()).collect();
-                json!({ "id": w["id"], "name": w["name"], "description": w["description"], "stageKeys": stage_keys })
-            }).collect();
+            let compact_workflows: Vec<Value> = workflows
+                .as_array()
+                .into_iter()
+                .flatten()
+                .map(|w| {
+                    let stage_keys: Vec<Value> =
+                        serde_json::from_str::<Vec<Value>>(w["stages"].as_str().unwrap_or("[]"))
+                            .unwrap_or_default()
+                            .into_iter()
+                            .filter_map(|s| s.get("key").cloned())
+                            .collect();
+                    json!({
+                        "id": w["id"], "name": w["name"], "description": w["description"],
+                        "variables": w["variables"], "stageKeys": stage_keys
+                    })
+                })
+                .collect();
             let compact_skills: Vec<Value> = skills.as_array().into_iter().flatten().map(|s| json!({
                 "id": s["id"], "name": s["name"], "description": s["description"], "version": s["version"], "source": s["source"],
             })).collect();
@@ -660,7 +692,13 @@ pub async fn call_tool(name: &str, args: Value) -> Result<Value> {
             if !stages.is_array() {
                 bail!("stages 必须是数组");
             }
-            let body = json!({ "name": name, "description": text(&args, "description"), "stages": stages });
+            let variables = args.get("variables").cloned().unwrap_or(json!([]));
+            let body = json!({
+                "name": name,
+                "description": text(&args, "description"),
+                "variables": variables,
+                "stages": stages
+            });
             api("POST", &ws_path("/workflows"), Some(body)).await
         }
         "update_workflow" => {
@@ -670,7 +708,13 @@ pub async fn call_tool(name: &str, args: Value) -> Result<Value> {
             if !stages.is_array() {
                 bail!("stages 必须是数组");
             }
-            let body = json!({ "name": name, "description": text(&args, "description"), "stages": stages });
+            let variables = args.get("variables").cloned().unwrap_or(json!([]));
+            let body = json!({
+                "name": name,
+                "description": text(&args, "description"),
+                "variables": variables,
+                "stages": stages
+            });
             api("PATCH", &format!("/api/v1/workflows/{id}"), Some(body)).await
         }
         "delete_workflow" => {
@@ -684,7 +728,7 @@ pub async fn call_tool(name: &str, args: Value) -> Result<Value> {
             copy(
                 &args,
                 &mut body,
-                &["projectId", "typeId", "priority", "tags"],
+                &["projectId", "typeId", "priority", "tags", "variables"],
             );
             api("POST", &format!("/api/v1/workflows/{id}/run"), Some(body)).await
         }

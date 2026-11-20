@@ -62,6 +62,7 @@ struct ListQuery {
     board_id: String,
     status: Option<String>,
     project_id: Option<String>,
+    workflow_id: Option<String>,
     q: Option<String>,
 }
 
@@ -79,6 +80,9 @@ async fn list(
     if query.project_id.is_some() {
         sql.push_str(" AND project_id = ?");
     }
+    if query.workflow_id.is_some() {
+        sql.push_str(" AND workflow_id = ?");
+    }
     if query.q.is_some() {
         sql.push_str(" AND title LIKE ?");
     }
@@ -89,6 +93,9 @@ async fn list(
     }
     if let Some(p) = &query.project_id {
         q = q.bind(p);
+    }
+    if let Some(w) = &query.workflow_id {
+        q = q.bind(w);
     }
     if let Some(s) = &query.q {
         q = q.bind(format!("%{s}%"));

@@ -216,6 +216,7 @@ export default function WorkflowCanvasEditor({ stages, agents, projects, selecte
       name: `节点 ${stages.length + 1}`,
       agentId: agents[0]?.id || '',
       dependsOn: selected ? [selected] : [],
+      maxRetries: 2,
       x: Math.max(0, Math.round(cx / 8) * 8 - NODE_W / 2),
       y: Math.max(0, Math.round(cy / 8) * 8 - NODE_H / 2),
     }])
@@ -337,6 +338,7 @@ export default function WorkflowCanvasEditor({ stages, agents, projects, selecte
                   <Chip size="small" label={projectName} variant="outlined" sx={{ height: 20, fontSize: 10 }} />
                   {s.dependsOn.length === 0 && <Chip size="small" label="入口" color="primary" sx={{ height: 20, fontSize: 10 }} />}
                   {s.when && <Chip size="small" label={s.when} color="warning" variant="outlined" sx={{ height: 20, fontSize: 10 }} />}
+                  {s.maxRetries !== undefined && s.maxRetries !== 2 && <Chip size="small" label={`重试 ${s.maxRetries}`} variant="outlined" sx={{ height: 20, fontSize: 10 }} />}
                 </Stack>
               </Paper>
             )

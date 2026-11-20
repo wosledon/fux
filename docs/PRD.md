@@ -219,8 +219,8 @@ stateDiagram-v2
 
 #### 3.6.2 工作流（DAG 多节点编排）
 
-- **定义**：工作区级模板，是由节点组成的有向无环图（DAG）。每个节点 = `key` + 名称 + 负责智能体 + **执行项目**（缺省继承主项目）+ 追加提示词 + `dependsOn`（依赖的节点 key 列表，空 = 入口节点）+ 可选 `when`（跳过条件）。保存时校验无环、`key` 唯一、依赖存在。任务主项目 = 收尾节点所属项目（看板筛选与卡片展示用）。
-- **发起**：入口一句话描述任务（可叠加任务类型模板）→ 生成看板卡片（待办）→ 调度器派发所有**入口节点**（无 `dependsOn` 的节点），无需手动指派。
+- **定义**：工作区级模板，是由节点组成的有向无环图（DAG）。每个节点 = `key` + 名称 + 负责智能体 + **执行项目**（缺省继承主项目）+ 追加提示词 + `dependsOn`（依赖的节点 key 列表，空 = 入口节点）+ 可选 `when`（跳过条件）+ `maxRetries`（突然中断重试上限，缺省 2）。模板可定义发起变量，在任务标题、内容、标签与节点提示词中用 `{{key}}` 引用。保存时校验无环、`key` 唯一、依赖存在、变量合法。任务主项目 = 收尾节点所属项目（看板筛选与卡片展示用）。
+- **发起**：入口一句话描述任务（可叠加任务类型模板与工作流发起变量）→ 变量渲染并持久化 → 生成看板卡片（待办）→ 调度器派发所有**入口节点**（无 `dependsOn` 的节点），无需手动指派。
 - **并行推进**：依赖全部 `succeeded` / `skipped` 的节点即可派发；同一任务可同时有多个 Run 在跑。**并行度由 DAG 结构决定**（无并行配置项），仅受各智能体 `maxConcurrent` 约束。每个 Run 独立租约与心跳，互不阻塞。
 - **跳过条件 `when`**：仅声明式表达式（变量比较 / 上游产物路径是否存在 / 标签判断），求值 false → 节点 `skipped`，下游按「依赖已终结」继续。**不做** LLM 动态路由（那属于主管模式，已列为非目标）；用户也可手动跳过节点。
 - **分支与产物**：每个节点在自己的项目上从父节点产物分支创建 `fux/task-<id>/<nodeKey>`（入口节点从默认分支创建）。节点完成即记录产物 `{projectId, remoteUrl, branch, commitSha, files, summary}`，写 `workflow.stage_completed`。
@@ -229,12 +229,12 @@ stateDiagram-v2
   - 无 remote 的项目无法跨机协作，只能同机执行（本地产物直接可用）；调度器选节点时需校验其能访问实例涉及的全部 remote。
 - **上下文交接**：任务内容 + 项目上下文 + 各直接上游节点的产物摘要（默认取该节点最近消息 + 变更文件列表）。
 - **终结与审核**：全部节点到达终态（`succeeded` / `skipped`）→ 按项目汇总交付清单进入审核；任一节点 `failed` 且重试耗尽 → 任务 `blocked`（取消其余运行中的节点）。交付点不是唯一的：按项目取该项目的**终端节点**分支，同项目多个并行终端则各成一条交付。
-- **失败与返工**：节点失败按重试策略重跑该节点；超过上限 → `blocked`。解除阻塞时重置失败/取消的节点（成功的保留），从失败节点继续。审核驳回或已完成返工只重置**汇点节点**与其交付；「从节点 N 返工」重置该节点及下游并可取消运行中的 Run，其他分支产物保留。旧 Run 的结束回调会被忽略，不会覆盖新状态。
+- **失败与返工**：节点突然中断按节点 `maxRetries`（0-5，缺省 2）重跑；超过上限 → `blocked`。解除阻塞时重置失败/取消的节点（成功的保留），从失败节点继续。审核驳回或已完成返工只重置**汇点节点**与其交付；「从节点 N 返工」重置该节点及下游并可取消运行中的 Run，其他分支产物保留。旧 Run 的结束回调会被忽略，不会覆盖新状态。
 - **边界**：无运行时动态分派（主管模式）、无循环依赖、无运行中改节点定义、无条件分支的“跳过”以外的流程控制。
 
 #### 3.6.3 工作流的呈现（看板与详情）
 
-- **工作流页**：模板列表 + 画布式编辑器（拖拽节点、连线建立依赖、自动布局，节点属性面板配置智能体/项目/追加提示词/`when`，画布坐标随模板保存）+ 顶部「一句话发起」入口 + 运行中 / 近期实例列表。
+- **工作流页**：近期实例 + 模板复制 + 模板列表 + 画布式编辑器（拖拽节点、连线建立依赖、自动布局，节点属性面板配置智能体/项目/追加提示词/`when`/重试上限，画布坐标随模板保存）+ 发起变量编辑 + 动态「一句话发起」入口。
 - **看板**：流程实例就是普通任务卡，**不引入新卡片类型**；卡片角标显示「工作流名 · 3/5 节点 · 2 运行中」，跨项目时额外显示参与项目数。
 - **任务详情 → 流程页签**：**DAG 图（节点 + 依赖连线，按状态着色）** + 节点明细（节点名 / 智能体 / 执行项目 / 状态 / 轮次 / 耗时 / 产物 commit）；点节点只看该 Run 的事件与该项目 diff。状态：`pending / ready / running / succeeded / failed / skipped / cancelled`。
 - **任务详情 → 审核页签**：按项目分组展示交付（分支 / PR-MR / 合并状态 / diff），全部合并才可批准。
@@ -458,7 +458,7 @@ flowchart LR
 | task_events                     | task_id, seq(单调), kind, actor(user/agent/system), run_id, payload(json), created_at                                                                                                                                                                                                                        |
 | cli_entries                     | id, workspace_id(或全局), name, kind(codex/opencode/pi/copilot/custom), command, args, env_template                                                                                                                                                                                                          |
 | agents                          | id, workspace_id, name, cli_entry_id, model, reasoning_effort, system_prompt, policy(json), gates(json), max_concurrent                                                                                                                                                                                      |
-| workflows                       | id, workspace_id, name, description, stages(json: [{key, name, agent_id, project_id, prompt_append, depends_on, when, x, y}]), created_at, updated_at                                                                                                                                                        |
+| workflows                       | id, workspace_id, name, description, variables(json), stages(json: [{key, name, agent_id, project_id, prompt_append, depends_on, when, max_retries, x, y}]), created_at, updated_at                                                                                                                                         |
 | skills / agent_skills           | skill: workspace_id, name, source, version；授权关系表                                                                                                                                                                                                                                                       |
 | mcp_servers / agent_mcp_servers | server: transport, command/url, secret_refs, status；授权 + tool_whitelist                                                                                                                                                                                                                                   |
 | runs                            | id, task_id, agent_id, stage(节点 key), project_id(节点项目), branch, head_sha(节点产物), node_id, acp_session_id, status(pending/running/succeeded/failed/skipped/cancelled), lease_expires_at, stop_reason(watchdog/...), turn_count, last_event_at, retry_of, usage(tokens, 仅展示), started_at, ended_at |

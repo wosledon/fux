@@ -253,6 +253,7 @@ export default function WorkflowCanvas({ stages, agents, projects, selected, onC
                   <Chip size="small" label={projectName} variant="outlined" sx={{ height: 20, fontSize: 10 }} />
                   {s.dependsOn.length === 0 && <Chip size="small" label="入口" color="primary" sx={{ height: 20, fontSize: 10 }} />}
                   {s.when && <Chip size="small" label={s.when} color="warning" variant="outlined" sx={{ height: 20, fontSize: 10 }} />}
+                  {s.maxRetries !== undefined && s.maxRetries !== 2 && <Chip size="small" label={`重试 ${s.maxRetries}`} variant="outlined" sx={{ height: 20, fontSize: 10 }} />}
                 </Stack>
                 {metaOf?.(s.key) && <Typography variant="caption" color="text.secondary" display="block" noWrap sx={{ mt: 0.5 }}>{metaOf(s.key)}</Typography>}
               </Paper>

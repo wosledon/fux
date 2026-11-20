@@ -4,7 +4,7 @@ use crate::server::auth::{AuthUser, require};
 use crate::server::error::{ApiError, ApiResult};
 use crate::server::events;
 use crate::server::models::{Lane, Workflow};
-use crate::server::workflow::{self, StageSpec};
+use crate::server::workflow::{self, StageSpec, WorkflowVariable};
 use actix_web::{HttpResponse, web};
 use serde::Deserialize;
 use serde_json::json;
@@ -39,6 +39,8 @@ async fn list(
 struct WorkflowReq {
     name: String,
     description: Option<String>,
+    #[serde(default)]
+    variables: Option<Vec<WorkflowVariable>>,
     stages: Vec<StageSpec>,
 }
 
@@ -89,15 +91,18 @@ async fn create(
         return Err(ApiError::bad_request("工作流名称不能为空"));
     }
     workflow::validate(&body.stages).map_err(ApiError::bad_request)?;
+    let variables = body.variables.clone().unwrap_or_default();
+    workflow::validate_variables(&variables).map_err(ApiError::bad_request)?;
     check_refs(&state, &ws_id, &body.stages).await?;
     let id = crate::new_id();
     sqlx::query(
-        "INSERT INTO workflows (id, workspace_id, name, description, stages) VALUES (?,?,?,?,?)",
+        "INSERT INTO workflows (id, workspace_id, name, description, variables, stages) VALUES (?,?,?,?,?,?)",
     )
     .bind(&id)
     .bind(&ws_id)
     .bind(body.name.trim())
     .bind(body.description.clone().unwrap_or_default())
+    .bind(serde_json::to_string(&variables).unwrap_or_else(|_| "[]".into()))
     .bind(serde_json::to_string(&body.stages).unwrap_or_else(|_| "[]".into()))
     .execute(&state.db)
     .await?;
@@ -125,12 +130,18 @@ async fn patch(
     let wf = load(&state, &id).await?;
     require(&state.db, &wf.workspace_id, &user.id, "admin").await?;
     workflow::validate(&body.stages).map_err(ApiError::bad_request)?;
+    let variables = match &body.variables {
+        Some(variables) => variables.clone(),
+        None => workflow::parse_variables(&wf)?,
+    };
+    workflow::validate_variables(&variables).map_err(ApiError::bad_request)?;
     check_refs(&state, &wf.workspace_id, &body.stages).await?;
     sqlx::query(
-        "UPDATE workflows SET name = ?, description = ?, stages = ?, updated_at = ? WHERE id = ?",
+        "UPDATE workflows SET name = ?, description = ?, variables = ?, stages = ?, updated_at = ? WHERE id = ?",
     )
     .bind(body.name.trim())
     .bind(body.description.clone().unwrap_or_default())
+    .bind(serde_json::to_string(&variables).unwrap_or_else(|_| "[]".into()))
     .bind(serde_json::to_string(&body.stages).unwrap_or_else(|_| "[]".into()))
     .bind(crate::now())
     .bind(&id)
@@ -163,6 +174,7 @@ struct RunReq {
     type_id: Option<String>,
     priority: Option<i64>,
     tags: Option<Vec<String>>,
+    variables: Option<serde_json::Value>,
 }
 
 /// 一句话发起：直接生成 ready 任务，调度器认领后由 DAG 引擎派发入口节点。
@@ -196,14 +208,41 @@ async fn run(
         .project_id
         .clone()
         .or_else(|| stages[0].project_id.clone());
+    if let Some(pid) = &project_id {
+        let n: i64 =
+            sqlx::query_scalar("SELECT COUNT(*) FROM projects WHERE id = ? AND workspace_id = ?")
+                .bind(pid)
+                .bind(&wf.workspace_id)
+                .fetch_one(&state.db)
+                .await?;
+        if n == 0 {
+            return Err(ApiError::bad_request("主项目不属于该工作区"));
+        }
+    }
+    let variable_specs = workflow::parse_variables(&wf)?;
+    let inputs = workflow::resolve_inputs(&variable_specs, body.variables.as_ref())?;
+    let title = workflow::render_template(body.title.trim(), &inputs);
+    if title.trim().is_empty() {
+        return Err(ApiError::bad_request("标题不能为空"));
+    }
+    let content = workflow::render_template(&body.content.clone().unwrap_or_default(), &inputs);
+    let tags: Vec<String> = body
+        .tags
+        .clone()
+        .unwrap_or_default()
+        .iter()
+        .map(|tag| workflow::render_template(tag, &inputs))
+        .collect();
     let task_id = crate::new_id();
     sqlx::query(
-        "INSERT INTO tasks (id, board_id, workspace_id, type_id, project_id, workflow_id, title, content, status, lane_id, priority, tags, created_by) VALUES (?,?,?,?,?,?,?,?, 'ready', ?,?,?,?)",
+        "INSERT INTO tasks (id, board_id, workspace_id, type_id, project_id, workflow_id, workflow_inputs, title, content, status, lane_id, priority, tags, created_by) VALUES (?,?,?,?,?,?,?,?,?, 'ready', ?,?,?,?)",
     )
     .bind(&task_id).bind(&board_id).bind(&wf.workspace_id).bind(&body.type_id)
-    .bind(&project_id).bind(&wf.id).bind(body.title.trim()).bind(body.content.clone().unwrap_or_default())
+    .bind(&project_id).bind(&wf.id)
+    .bind(serde_json::to_string(&inputs).unwrap_or_else(|_| "{}".into()))
+    .bind(title).bind(content)
     .bind(lane.map(|l| l.id)).bind(body.priority.unwrap_or(0))
-    .bind(serde_json::to_string(&body.tags.clone().unwrap_or_default()).unwrap_or_else(|_| "[]".into()))
+    .bind(serde_json::to_string(&tags).unwrap_or_else(|_| "[]".into()))
     .bind(&user.id)
     .execute(&state.db).await?;
     let task = crate::server::domain::load_task(&state, &task_id).await?;
@@ -224,7 +263,12 @@ async fn run(
         "workflow.started",
         &format!("user:{}", user.id),
         None,
-        json!({ "workflowId": wf.id, "workflowName": wf.name, "stages": stages.len() }),
+        json!({
+            "workflowId": wf.id,
+            "workflowName": wf.name,
+            "stages": stages.len(),
+            "variableKeys": inputs.keys().cloned().collect::<Vec<_>>()
+        }),
     )
     .await?;
     Ok(HttpResponse::Ok().json(task))
