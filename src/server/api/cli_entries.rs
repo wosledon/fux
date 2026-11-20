@@ -1,3 +1,4 @@
+//! ACP CLI 条目管理、本机可用性探测与模型目录读取。
 use crate::acp::AcpClient;
 use crate::server::SharedState;
 use crate::server::auth::{AuthUser, require};
@@ -12,6 +13,12 @@ use serde_json::json;
 #[serde(rename_all = "camelCase")]
 struct EntryQuery {
     workspace_id: Option<String>,
+}
+
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct DetectQuery {
+    workspace_id: String,
 }
 
 async fn list(
@@ -43,6 +50,43 @@ async fn list(
         })
         .collect();
     Ok(HttpResponse::Ok().json(rows))
+}
+
+/// 批量探测当前工作区可见的 CLI，供接入页打开时自动扫描。
+async fn detect(
+    state: SharedState,
+    user: AuthUser,
+    query: web::Query<DetectQuery>,
+) -> ApiResult<HttpResponse> {
+    require(&state.db, &query.workspace_id, &user.id, "member").await?;
+    let entries = sqlx::query_as::<_, CliEntry>(
+        "SELECT * FROM cli_entries WHERE workspace_id IS NULL OR workspace_id = ? ORDER BY is_default DESC, name",
+    )
+    .bind(&query.workspace_id)
+    .fetch_all(&state.db)
+    .await?;
+    let total = entries.len();
+    let mut available_count = 0;
+    let mut results = Vec::with_capacity(total);
+    for entry in entries {
+        let path = which::which(&entry.command)
+            .ok()
+            .map(|p| p.to_string_lossy().to_string());
+        if path.is_some() {
+            available_count += 1;
+        }
+        results.push(json!({
+            "entryId": entry.id,
+            "available": path.is_some(),
+            "path": path,
+        }));
+    }
+    Ok(HttpResponse::Ok().json(json!({
+        "results": results,
+        "availableCount": available_count,
+        "total": total,
+        "detectedAt": crate::now(),
+    })))
 }
 
 #[derive(Deserialize)]
@@ -204,6 +248,7 @@ async fn models(
 pub fn routes(cfg: &mut web::ServiceConfig) {
     cfg.route("/cli-entries", web::get().to(list))
         .route("/cli-entries", web::post().to(create))
+        .route("/cli-entries/detect", web::get().to(detect))
         .route("/cli-entries/{id}/probe", web::post().to(probe))
         .route("/cli-entries/{id}/models", web::post().to(models))
         .route("/cli-entries/{id}", web::delete().to(delete));

@@ -1124,6 +1124,186 @@ async fn assistant_sessions_and_chat() {
 }
 
 #[actix_web::test]
+async fn nodes_pair_approve_overview_and_delete() {
+    let ctx = setup().await;
+    let app = app!(ctx);
+    let owner = register(&app, "nodes1").await;
+    let (_ws, board) = create_ws(&app, &owner).await;
+
+    let (s, pairing) = call(
+        &app,
+        auth(
+            test::TestRequest::post()
+                .uri("/api/v1/nodes/pairing-codes")
+                .set_json(json!({ "expiresHours": 24 })),
+            &owner,
+        ),
+    )
+    .await;
+    assert_eq!(s, 200, "pairing code: {pairing}");
+    let code = pairing["code"].as_str().unwrap();
+    let (s, paired) = call(
+        &app,
+        test::TestRequest::post().uri("/api/v1/nodes/pair").set_json(json!({
+            "code": code,
+            "name": "远程验证节点",
+            "capabilities": { "os": "windows", "clis": ["fux-mock-agent"], "projectPaths": [], "load": 0 },
+        })),
+    )
+    .await;
+    assert_eq!(s, 200, "pair: {paired}");
+    let node_id = paired["nodeId"].as_str().unwrap();
+
+    let (s, task) = call(
+        &app,
+        auth(
+            test::TestRequest::post().uri("/api/v1/tasks").set_json(
+                json!({ "boardId": board, "title": "节点运行状态验证", "content": "内容" }),
+            ),
+            &owner,
+        ),
+    )
+    .await;
+    assert_eq!(s, 200, "create task: {task}");
+    let task_id = task["id"].as_str().unwrap();
+    sqlx::query("INSERT INTO runs (id, task_id, agent_id, node_id, status) VALUES ('node-run', ?, 'cli-mock', ?, 'running')")
+        .bind(task_id)
+        .bind(node_id)
+        .execute(&ctx.state.db)
+        .await
+        .unwrap();
+    sqlx::query("INSERT INTO task_events (task_id, seq, kind, actor, run_id, payload) VALUES (?, 99, 'auth_required', 'agent:cli-mock', 'node-run', ?)")
+        .bind(task_id)
+        .bind(json!({ "message": "401 Unauthorized" }).to_string())
+        .execute(&ctx.state.db)
+        .await
+        .unwrap();
+
+    let (s, listed) = call(
+        &app,
+        auth(test::TestRequest::get().uri("/api/v1/nodes"), &owner),
+    )
+    .await;
+    assert_eq!(s, 200, "list nodes: {listed}");
+    let node = listed
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|n| n["id"] == node_id)
+        .unwrap();
+    assert_eq!(node["approved"], 0);
+    assert_eq!(node["runningRuns"][0]["taskTitle"], "节点运行状态验证");
+    assert_eq!(node["cliAuthRequired"], true);
+    assert_eq!(node["cliAuthMessage"], "401 Unauthorized");
+    assert!(node.get("token").is_none(), "节点令牌不可回传");
+
+    sqlx::query("UPDATE runs SET status = 'failed', stop_reason = 'interrupted', ended_at = ? WHERE id = 'node-run'")
+        .bind(fux::now())
+        .execute(&ctx.state.db)
+        .await
+        .unwrap();
+    let (_, listed) = call(
+        &app,
+        auth(test::TestRequest::get().uri("/api/v1/nodes"), &owner),
+    )
+    .await;
+    let node = listed
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|n| n["id"] == node_id)
+        .unwrap();
+    assert_eq!(node["runningRuns"].as_array().unwrap().len(), 0);
+    assert_eq!(node["recentError"]["stopReason"], "interrupted");
+
+    let (s, _) = call(
+        &app,
+        auth(
+            test::TestRequest::post().uri(&format!("/api/v1/nodes/{node_id}/approve")),
+            &owner,
+        ),
+    )
+    .await;
+    assert_eq!(s, 200);
+    let (s, _) = call(
+        &app,
+        auth(
+            test::TestRequest::delete().uri(&format!("/api/v1/nodes/{node_id}")),
+            &owner,
+        ),
+    )
+    .await;
+    assert_eq!(s, 200);
+    let (_, listed) = call(
+        &app,
+        auth(test::TestRequest::get().uri("/api/v1/nodes"), &owner),
+    )
+    .await;
+    assert!(
+        !listed
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|n| n["id"] == node_id)
+    );
+
+    let (s, _) = call(
+        &app,
+        test::TestRequest::post()
+            .uri("/api/v1/nodes/pair")
+            .set_json(json!({
+                "code": code, "name": "重复配对", "capabilities": {},
+            })),
+    )
+    .await;
+    assert_eq!(s, 409, "配对码只能使用一次");
+}
+
+#[actix_web::test]
+async fn cli_detect_reports_workspace_entries_and_enforces_rbac() {
+    let ctx = setup().await;
+    let app = app!(ctx);
+    let owner = register(&app, "detect1").await;
+    let (ws, _) = create_ws(&app, &owner).await;
+    let mock_bin = env!("CARGO_BIN_EXE_fux-mock-agent");
+    let (s, cli) = call(
+        &app,
+        auth(
+            test::TestRequest::post()
+                .uri("/api/v1/cli-entries")
+                .set_json(json!({ "workspaceId": &ws, "name": "自动探测 Mock", "command": mock_bin, "args": [] })),
+            &owner,
+        ),
+    )
+    .await;
+    assert_eq!(s, 200, "create cli: {cli}");
+    let cli_id = cli["id"].as_str().unwrap();
+    let uri = format!("/api/v1/cli-entries/detect?workspaceId={ws}");
+
+    let (s, v) = call(&app, auth(test::TestRequest::get().uri(&uri), &owner)).await;
+    assert_eq!(s, 200, "detect: {v}");
+    let results = v["results"].as_array().unwrap();
+    let detected = results
+        .iter()
+        .find(|r| r["entryId"] == cli_id)
+        .expect("自定义 CLI 应在探测结果中");
+    assert_eq!(
+        detected["available"], true,
+        "mock CLI 应可自动探测: {detected}"
+    );
+    assert!(detected["path"].as_str().is_some());
+    assert_eq!(v["total"].as_u64(), Some(results.len() as u64));
+    assert!(v["availableCount"].as_u64().unwrap() >= 1);
+    assert!(v["detectedAt"].as_str().is_some());
+
+    let outsider = register(&app, "detect2").await;
+    let (s, _) = call(&app, auth(test::TestRequest::get().uri(&uri), &outsider)).await;
+    assert_eq!(s, 403, "非成员不可探测工作区 CLI");
+    let (s, _) = call(&app, test::TestRequest::get().uri(&uri)).await;
+    assert_eq!(s, 401, "未登录不可探测 CLI");
+}
+
+#[actix_web::test]
 async fn cli_models_probe_reads_acp_config_options() {
     let ctx = setup().await;
     let app = app!(ctx);

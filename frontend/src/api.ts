@@ -58,6 +58,8 @@ export interface Task {
 }
 export interface TaskType { id: string; workspaceId: string; name: string; icon: string; titleTemplate: string; contentTemplate: string; variablesSchema: string; defaults: string }
 export interface CliEntry { id: string; workspaceId?: string; name: string; kind: string; command: string; args: string; envTemplate: string; isDefault: number }
+export interface CliProbeResult { entryId: string; available: boolean; path?: string | null }
+export interface CliDetectResult { results: CliProbeResult[]; availableCount: number; total: number; detectedAt: string }
 export interface Agent {
   id: string; workspaceId: string; name: string; cliEntryId: string; model: string; reasoningEffort: string
   systemPrompt: string; policy: string; gates: string; maxConcurrent: number; paused: number; matchTags: string
@@ -78,7 +80,12 @@ export interface Delivery {
 export interface Skill { id: string; workspaceId: string; name: string; description: string; source: string; version: string; content: string }
 export interface McpServer { id: string; workspaceId: string; name: string; transport: 'stdio' | 'sse' | 'http'; command?: string; args: string; url?: string; envJson: string; status: string }
 export interface Run { id: string; taskId: string; agentId: string; nodeId: string; stage: number; stageKey?: string; projectId?: string; branch?: string; headSha?: string; retryCount: number; status: string; stopReason?: string; turnCount: number; usageTokens: number; startedAt: string; endedAt?: string; acpSessionId?: string }
-export interface NodeInfo { id: string; name: string; mode: string; approved: number; connStatus: string; capabilities: string; lastHeartbeat?: string; createdAt: string }
+export interface NodeRunInfo { runId: string; taskId: string; taskTitle: string; stageKey?: string; startedAt: string }
+export interface NodeErrorInfo { runId: string; taskId: string; taskTitle: string; stopReason?: string; endedAt?: string }
+export interface NodeInfo {
+  id: string; name: string; mode: string; approved: number; connStatus: string; capabilities: string; lastHeartbeat?: string; createdAt: string
+  runningRuns: NodeRunInfo[]; recentError?: NodeErrorInfo | null; cliAuthRequired: boolean; cliAuthMessage?: string
+}
 export interface TaskEvent { id: number; taskId: string; seq: number; kind: string; actor: string; runId?: string; payload: string; createdAt: string }
 export interface Envelope { workspaceId: string; taskId: string; seq: number; kind: string; actor: string; runId?: string; payload: any; createdAt: string }
 export interface Member { userId: string; username: string; displayName: string; role: string; joinedAt: string }

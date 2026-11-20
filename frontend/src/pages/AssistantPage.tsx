@@ -6,7 +6,6 @@ import {
   Tooltip, Typography, ListItemButton, Dialog, DialogTitle, DialogContent, DialogActions, MenuItem, Alert, Collapse,
 } from '@mui/material'
 import AddCommentOutlinedIcon from '@mui/icons-material/AddCommentOutlined'
-import SmartToyOutlinedIcon from '@mui/icons-material/SmartToyOutlined'
 import SendRoundedIcon from '@mui/icons-material/SendRounded'
 import StopCircleOutlinedIcon from '@mui/icons-material/StopCircleOutlined'
 import ContentCopyIcon from '@mui/icons-material/ContentCopy'
@@ -21,6 +20,7 @@ import SettingsOutlinedIcon from '@mui/icons-material/SettingsOutlined'
 import PsychologyOutlinedIcon from '@mui/icons-material/PsychologyOutlined'
 import ExpandMoreIcon from '@mui/icons-material/ExpandMore'
 import BuildOutlinedIcon from '@mui/icons-material/BuildOutlined'
+import HistoryOutlinedIcon from '@mui/icons-material/HistoryOutlined'
 import {
   API, get, patch, del, getToken, parseJson,
   type AssistantSession, type AssistantMessage, type Agent, type Board, type Task, type TaskStatus, type CliEntry,
@@ -60,6 +60,7 @@ export default function AssistantPage() {
   const [thinking, setThinking] = useState(false)
   const [status, setStatus] = useState('')
   const [settingsOpen, setSettingsOpen] = useState(false)
+  const [sessionsOpen, setSessionsOpen] = useState(false)
 
   const bottomRef = useRef<HTMLDivElement>(null)
   const abortRef = useRef<AbortController | null>(null)
@@ -185,7 +186,7 @@ export default function AssistantPage() {
 
   const send = async (preset?: string) => {
     const text = (preset ?? input).trim()
-    if (!text || busy) return
+    if (!text || busy || generating || !assistantAgent) return
     setInput('')
     setMsgs(prev => [
       ...prev,
@@ -352,45 +353,19 @@ export default function AssistantPage() {
         </Box>
         <Divider />
         <Box sx={{ flexGrow: 1, overflowY: 'auto', px: 1, py: 1 }}>
-          {sessions.length === 0 && (
-            <Typography variant="caption" color="text.secondary" sx={{ p: 2, display: 'block' }}>还没有对话</Typography>
-          )}
-          {grouped.map(group => (
-            <Box key={group.label} sx={{ mb: 1.25 }}>
-              <Typography variant="caption" color="text.secondary" sx={{ px: 1.25, py: 0.75, display: 'block' }}>{group.label}</Typography>
-              {group.items.map(s => (
-                <ListItemButton key={s.id} selected={s.id === activeId} onClick={() => openSession(s.id)}
-                  sx={{ borderRadius: 1.25, mb: 0.25, pr: 0.5, alignItems: 'flex-start' }}>
-                  <Box sx={{ minWidth: 0, flexGrow: 1 }}>
-                    <Typography variant="body2" noWrap fontWeight={s.id === activeId ? 650 : 500}>{s.title || '新对话'}</Typography>
-                    <Typography variant="caption" color="text.secondary" noWrap display="block">
-                      {s.preview || `${s.messageCount} 条消息`}
-                    </Typography>
-                  </Box>
-                  <Tooltip title="删除会话">
-                    <IconButton size="small" sx={{ opacity: 0.5, '&:hover': { opacity: 1 } }}
-                      onClick={e => { e.stopPropagation(); void removeSession(s.id) }}>
-                      <DeleteOutlineIcon sx={{ fontSize: 15 }} />
-                    </IconButton>
-                  </Tooltip>
-                </ListItemButton>
-              ))}
-            </Box>
-          ))}
+          <SessionList groups={grouped} activeId={activeId} onOpen={openSession} onRemove={id => void removeSession(id)} />
         </Box>
         <Divider />
         <Box sx={{ p: 2, display: 'flex', alignItems: 'center', gap: 1.25 }}>
-          <Box sx={{ width: 30, height: 30, borderRadius: 1, bgcolor: 'action.selected', color: 'primary.main', display: 'grid', placeItems: 'center', flexShrink: 0 }}>
-            <SmartToyOutlinedIcon sx={{ fontSize: 17 }} />
-          </Box>
+          <PilotMark size={30} />
           <Box sx={{ minWidth: 0, flexGrow: 1 }}>
-            <Typography variant="caption" fontWeight={650} noWrap display="block">{assistantAgent?.name || '未配置助理'}</Typography>
+            <Typography variant="caption" fontWeight={650} noWrap display="block">{assistantAgent?.name || '未配置驱动智能体'}</Typography>
             <Typography variant="caption" color="text.secondary" noWrap display="block">
               {assistantAgent ? (assistantAgent.model || '默认模型') : '请先在工作区创建智能体'}
             </Typography>
           </Box>
           {isAdmin && (
-            <Tooltip title="助理设置">
+            <Tooltip title="Pilot 设置">
               <IconButton size="small" onClick={() => setSettingsOpen(true)}><SettingsOutlinedIcon sx={{ fontSize: 15 }} /></IconButton>
             </Tooltip>
           )}
@@ -399,19 +374,23 @@ export default function AssistantPage() {
 
       {/* 对话主区 */}
       <Box sx={{ flexGrow: 1, minWidth: 0, display: 'flex', flexDirection: 'column', minHeight: 0 }}>
-        <Box sx={{ height: 66, px: { xs: 2, md: 3 }, display: 'flex', alignItems: 'center', gap: 1.5, bgcolor: 'background.paper', borderBottom: '1px solid', borderColor: 'divider', flexShrink: 0 }}>
-          <Box sx={{ width: 34, height: 34, borderRadius: 1.5, bgcolor: 'primary.main', color: 'primary.contrastText', display: 'grid', placeItems: 'center' }}>
-            <AutoAwesomeIcon sx={{ fontSize: 19 }} />
-          </Box>
-          <Box>
-            <Typography variant="subtitle2" fontWeight={700}>Fux 助理</Typography>
-            <Typography variant="caption" color="text.secondary">
-              {activeId ? (sessions.find(s => s.id === activeId)?.title || '对话') : '新对话'} · 可通过 MCP 操作工作台
+        <Box sx={{ height: 68, px: { xs: 2, md: 3 }, display: 'flex', alignItems: 'center', gap: 1.5, bgcolor: 'background.paper', borderBottom: '1px solid', borderColor: 'divider', flexShrink: 0 }}>
+          <PilotMark size={36} />
+          <Box sx={{ minWidth: 0 }}>
+            <Box sx={{ display: 'flex', alignItems: 'center', gap: 1 }}>
+              <Typography variant="subtitle2" fontWeight={750}>Fux Pilot</Typography>
+              <Chip size="small" label="工作区领航员" variant="outlined" sx={{ height: 19, fontSize: 10, display: { xs: 'none', sm: 'inline-flex' } }} />
+            </Box>
+            <Typography variant="caption" color="text.secondary" noWrap display="block">
+              {activeId ? (sessions.find(s => s.id === activeId)?.title || '对话') : '新对话'} · 查询并推进当前工作区
             </Typography>
           </Box>
           <Box sx={{ flexGrow: 1 }} />
+          <Tooltip title="历史对话">
+            <IconButton onClick={() => setSessionsOpen(true)} sx={{ display: { xs: 'inline-flex', md: 'none' } }}><HistoryOutlinedIcon fontSize="small" /></IconButton>
+          </Tooltip>
           {isAdmin && (
-            <Tooltip title="助理设置">
+            <Tooltip title="Pilot 设置">
               <IconButton onClick={() => setSettingsOpen(true)}><SettingsOutlinedIcon fontSize="small" /></IconButton>
             </Tooltip>
           )}
@@ -421,7 +400,7 @@ export default function AssistantPage() {
         <Box sx={{ flexGrow: 1, overflowY: 'auto', px: { xs: 2, md: 4 }, py: 3 }}>
           <Box sx={{ maxWidth: 860, mx: 'auto' }}>
             {msgs.length === 0 ? (
-              <EmptyIntro name={displayName} onPick={s => void send(s)} />
+              <EmptyIntro name={displayName} enabled={!!assistantAgent} onPick={s => void send(s)} />
             ) : (
               <Stack spacing={2.75}>
                 {msgs.map((m, i) => {
@@ -441,23 +420,29 @@ export default function AssistantPage() {
                   }
                   const isLastAssistant = i === lastAssistantIdx
                   return (
-                    <Box key={i} sx={{ maxWidth: 900 }}>
-                      {m.content ? <Markdown text={m.content} /> : <TypingDots />}
-                      {busy && isLastAssistant && m.content && (
-                        <Box component="span" sx={{
-                          display: 'inline-block', width: 7, height: 15, ml: 0.5, bgcolor: 'primary.main', verticalAlign: '-3px',
-                          animation: 'cursorBlink 1s steps(1) infinite', '@keyframes cursorBlink': { '50%': { opacity: 0 } },
-                        }} />
-                      )}
-                      {m.content && (
-                        <Box sx={{ display: 'flex', justifyContent: 'flex-end', mt: 0.25 }}>
-                          <Tooltip title="复制回答">
-                            <IconButton size="small" onClick={() => void copyText(m.content || '')} sx={{ p: 0.5 }}>
-                              <ContentCopyIcon sx={{ fontSize: 13 }} />
-                            </IconButton>
-                          </Tooltip>
+                    <Box key={i} sx={{ display: 'flex', alignItems: 'flex-start', gap: 1.25 }}>
+                      <PilotMark size={28} />
+                      <Box sx={{ flexGrow: 1, minWidth: 0 }}>
+                        <Box sx={{ display: 'flex', alignItems: 'center', gap: 0.75, minHeight: 28, mb: 0.5 }}>
+                          <Typography variant="caption" fontWeight={750} color="primary.main">Pilot</Typography>
+                          {m.createdAt && <Typography variant="caption" color="text.disabled">{m.createdAt.slice(11, 16)}</Typography>}
+                          <Box sx={{ flexGrow: 1 }} />
+                          {m.content && (
+                            <Tooltip title="复制回答">
+                              <IconButton size="small" onClick={() => void copyText(m.content || '')} sx={{ p: 0.5 }}>
+                                <ContentCopyIcon sx={{ fontSize: 13 }} />
+                              </IconButton>
+                            </Tooltip>
+                          )}
                         </Box>
-                      )}
+                        {m.content ? <Markdown text={m.content} /> : <TypingDots />}
+                        {busy && isLastAssistant && m.content && (
+                          <Box component="span" sx={{
+                            display: 'inline-block', width: 7, height: 15, ml: 0.5, bgcolor: 'primary.main', verticalAlign: '-3px',
+                            animation: 'cursorBlink 1s steps(1) infinite', '@keyframes cursorBlink': { '50%': { opacity: 0 } },
+                          }} />
+                        )}
+                      </Box>
                     </Box>
                   )
                 })}
@@ -475,20 +460,17 @@ export default function AssistantPage() {
 
         <Box sx={{ px: { xs: 2, md: 4 }, py: 2, bgcolor: 'background.paper', borderTop: '1px solid', borderColor: 'divider', flexShrink: 0 }}>
           <Box sx={{ maxWidth: 860, mx: 'auto' }}>
-            {msgs.length === 0 && (
-              <Stack direction="row" spacing={1} sx={{ mb: 1.25, flexWrap: 'wrap', gap: 1 }}>
-                {SUGGESTIONS.map(s => (
-                  <Chip key={s} label={s} size="small" variant="outlined" onClick={() => void send(s)}
-                    sx={{ '&:hover': { borderColor: 'primary.main', bgcolor: 'action.hover' } }} />
-                ))}
-              </Stack>
+            {!assistantAgent && (
+              <Alert severity="info" sx={{ mb: 1.25 }} action={isAdmin ? <Button color="inherit" size="small" onClick={() => setSettingsOpen(true)}>配置</Button> : undefined}>
+                请先为 Pilot 选择一个驱动智能体。
+              </Alert>
             )}
             <Paper variant="outlined" sx={{
               display: 'flex', alignItems: 'flex-end', gap: 0.75, p: 0.75, pl: 1, borderRadius: '16px',
               transition: 'border-color .15s, box-shadow .15s',
-              '&:focus-within': { borderColor: 'primary.main', boxShadow: '0 0 0 3px rgba(99,91,255,0.12)' },
+              '&:focus-within': { borderColor: 'primary.main', boxShadow: theme => `0 0 0 3px ${theme.palette.action.selected}` },
             }}>
-              <TextField variant="standard" fullWidth multiline maxRows={6} placeholder="描述你的目标，或让助理查询/创建任务…"
+              <TextField variant="standard" fullWidth multiline maxRows={6} placeholder={assistantAgent ? '告诉 Pilot 你想推进什么…' : '请先配置 Pilot 的驱动智能体'}
                 value={input} onChange={e => setInput(e.target.value)}
                 onKeyDown={e => { if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); void send() } }}
                 slotProps={{ input: { disableUnderline: true } }}
@@ -497,19 +479,21 @@ export default function AssistantPage() {
                 <Tooltip title="停止生成">
                   <IconButton color="error" onClick={abortCurrent} sx={{ mb: 0.25 }}><StopCircleOutlinedIcon /></IconButton>
                 </Tooltip>
+              ) : generating ? (
+                <Box sx={{ width: 40, height: 40, display: 'grid', placeItems: 'center', mb: 0.25 }}><CircularProgress size={19} /></Box>
               ) : (
                 <Tooltip title="发送">
                   <span>
-                    <IconButton color="primary" disabled={!input.trim()} onClick={() => void send()} sx={{ mb: 0.25 }}>
+                    <IconButton color="primary" disabled={!input.trim() || !assistantAgent} onClick={() => void send()} sx={{ mb: 0.25 }}>
                       <SendRoundedIcon />
                     </IconButton>
                   </span>
                 </Tooltip>
               )}
             </Paper>
-            <Box sx={{ display: 'flex', justifyContent: 'space-between', mt: 0.75, px: 0.5 }}>
+            <Box sx={{ display: 'flex', justifyContent: 'space-between', gap: 2, mt: 0.75, px: 0.5 }}>
               <Typography variant="caption" color="text.secondary">Enter 发送 · Shift + Enter 换行</Typography>
-              <Typography variant="caption" color="text.secondary">{assistantAgent ? `由 ${assistantAgent.name} 驱动` : '需要先创建智能体'}</Typography>
+              <Typography variant="caption" color="text.secondary" noWrap>{generating ? 'Pilot 正在生成当前回答…' : assistantAgent ? `Pilot 由 ${assistantAgent.name} 驱动` : '需要先创建智能体'}</Typography>
             </Box>
           </Box>
         </Box>
@@ -522,10 +506,10 @@ export default function AssistantPage() {
       }}>
         <Typography variant="overline" color="text.secondary">工作区概览</Typography>
         <Box sx={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 1, mt: 1 }}>
-          <StatCard label="全部任务" value={stats.total} color="#697386" />
-          <StatCard label="进行中" value={stats.doing} color="#635bff" />
-          <StatCard label="待审核" value={stats.review} color="#875bf7" />
-          <StatCard label="阻塞" value={stats.blocked} color="#d85160" />
+          <StatCard label="全部任务" value={stats.total} color="text.secondary" />
+          <StatCard label="进行中" value={stats.doing} color="primary.main" />
+          <StatCard label="待审核" value={stats.review} color="secondary.main" />
+          <StatCard label="阻塞" value={stats.blocked} color="error.main" />
         </Box>
 
         <SectionTitle icon={<ErrorOutlineIcon sx={{ fontSize: 15, color: 'error.main' }} />} title="需要关注" />
@@ -542,6 +526,7 @@ export default function AssistantPage() {
         <Stack spacing={0.5}>
           {SUGGESTIONS.map(s => (
             <Button key={s} size="small" endIcon={<ArrowForwardIcon sx={{ fontSize: 13 }} />} onClick={() => void send(s)}
+              disabled={busy || generating || !assistantAgent}
               sx={{ justifyContent: 'space-between', textTransform: 'none', color: 'text.primary', bgcolor: 'action.hover', borderRadius: 1.25, px: 1.25, py: 0.75 }}>
               <Typography variant="caption" noWrap>{s}</Typography>
             </Button>
@@ -550,9 +535,16 @@ export default function AssistantPage() {
 
         <Divider sx={{ my: 2.25 }} />
         <Typography variant="caption" color="text.secondary" sx={{ lineHeight: 1.7, display: 'block' }}>
-          助理通过工作区内置 MCP 执行操作，所有任务变更都会写入事件时间线。
+          Pilot 通过工作区内置 MCP 执行操作，所有任务变更都会写入事件时间线。
         </Typography>
       </Box>
+      <Dialog open={sessionsOpen} onClose={() => setSessionsOpen(false)} fullWidth maxWidth="xs">
+        <DialogTitle>Pilot 对话</DialogTitle>
+        <DialogContent sx={{ px: 1, py: 1 }}>
+          <SessionList groups={grouped} activeId={activeId} onOpen={id => { openSession(id); setSessionsOpen(false) }} onRemove={id => void removeSession(id)} />
+        </DialogContent>
+        <DialogActions><Button startIcon={<AddCommentOutlinedIcon />} onClick={() => { setSessionsOpen(false); newChat() }}>开始新对话</Button></DialogActions>
+      </Dialog>
       {settingsOpen && (
         <AssistantSettingsDialog
           wsId={wsId}
@@ -567,7 +559,50 @@ export default function AssistantPage() {
   )
 }
 
-/// 选择驱动 AI 助理的智能体（保存到工作区 settings.assistantAgentId）。
+function PilotMark({ size = 34 }: { size?: number }) {
+  return (
+    <Box sx={{
+      width: size, height: size, borderRadius: `${Math.round(size * 0.3)}px`, flexShrink: 0,
+      display: 'grid', placeItems: 'center', color: 'primary.contrastText',
+      background: theme => `linear-gradient(135deg, ${theme.palette.primary.main}, ${theme.palette.secondary.main})`,
+      boxShadow: 1,
+    }}>
+      <AutoAwesomeIcon sx={{ fontSize: Math.round(size * 0.5) }} />
+    </Box>
+  )
+}
+
+function SessionList({ groups, activeId, onOpen, onRemove }: {
+  groups: ReturnType<typeof groupSessions>; activeId: string | null
+  onOpen: (id: string) => void; onRemove: (id: string) => void
+}) {
+  if (groups.length === 0) {
+    return <Typography variant="caption" color="text.secondary" sx={{ p: 2, display: 'block', textAlign: 'center' }}>还没有历史对话</Typography>
+  }
+  return (
+    <Box>
+      {groups.map(group => (
+        <Box key={group.label} sx={{ mb: 1.25 }}>
+          <Typography variant="caption" color="text.secondary" sx={{ px: 1.25, py: 0.75, display: 'block' }}>{group.label}</Typography>
+          {group.items.map(s => (
+            <ListItemButton key={s.id} selected={s.id === activeId} onClick={() => onOpen(s.id)}
+              sx={{ borderRadius: 1.25, mb: 0.25, pr: 0.5, alignItems: 'flex-start' }}>
+              <Box sx={{ minWidth: 0, flexGrow: 1 }}>
+                <Typography variant="body2" noWrap fontWeight={s.id === activeId ? 650 : 500}>{s.title || '新对话'}</Typography>
+                <Typography variant="caption" color="text.secondary" noWrap display="block">{s.preview || `${s.messageCount} 条消息`}</Typography>
+              </Box>
+              <Tooltip title="删除会话">
+                <IconButton className="session-delete" size="small" onClick={e => { e.stopPropagation(); onRemove(s.id) }}><DeleteOutlineIcon sx={{ fontSize: 15 }} /></IconButton>
+              </Tooltip>
+            </ListItemButton>
+          ))}
+        </Box>
+      ))}
+    </Box>
+  )
+}
+
+/// 选择驱动 Fux Pilot 的智能体（保存到工作区 settings.assistantAgentId）。
 function AssistantSettingsDialog({ wsId, agents, clis, settings, currentAgentId, onClose }: {
   wsId: string; agents: Agent[]; clis: CliEntry[]; settings: string; currentAgentId?: string; onClose: () => void
 }) {
@@ -587,7 +622,7 @@ function AssistantSettingsDialog({ wsId, agents, clis, settings, currentAgentId,
       const base = parseJson<Record<string, unknown>>(settings, {})
       await patch(`/workspaces/${wsId}`, { settings: { ...base, assistantAgentId: agentId } })
       await qc.invalidateQueries({ queryKey: ['workspace', wsId] })
-      toast('助理设置已保存', 'success')
+      toast('Pilot 设置已保存', 'success')
       onClose()
     } catch (e: any) {
       setErr(e.message)
@@ -605,10 +640,10 @@ function AssistantSettingsDialog({ wsId, agents, clis, settings, currentAgentId,
 
   return (
     <Dialog open onClose={onClose} fullWidth maxWidth="sm">
-      <DialogTitle>助理设置</DialogTitle>
+      <DialogTitle>Pilot 设置</DialogTitle>
       <DialogContent sx={{ display: 'grid', gap: 2, pt: '12px !important' }}>
-        <TextField select label="助理智能体" value={agentId} onChange={e => setAgentId(e.target.value)}
-          helperText="助理会继承该智能体的 CLI、模型、推理强度、系统提示词、SKILL 与 MCP 授权。">
+        <TextField select label="驱动智能体" value={agentId} onChange={e => setAgentId(e.target.value)}
+          helperText="Pilot 会继承该智能体的 CLI、模型、推理强度、系统提示词、SKILL 与 MCP 授权。">
           {agents.map(a => {
             const c = clis.find(x => x.id === a.cliEntryId)
             return <MenuItem key={a.id} value={a.id}>{a.name} · {c?.name || a.cliEntryId}{a.model ? ` · ${a.model}` : ''}</MenuItem>
@@ -674,27 +709,31 @@ function TaskRow({ task, onClick }: { task: Task; onClick: () => void }) {
   )
 }
 
-function EmptyIntro({ name, onPick }: { name: string; onPick: (s: string) => void }) {
+function EmptyIntro({ name, enabled, onPick }: { name: string; enabled: boolean; onPick: (s: string) => void }) {
+  const cards = [
+    { icon: <InsightsOutlinedIcon />, t: '掌握进展', d: '汇总看板、阻塞与审核情况', prompt: '汇总当前看板进展' },
+    { icon: <TaskAltIcon />, t: '创建任务', d: '把一句话转化为规范任务卡', prompt: '把「登录页报错」创建成 Bug 修复任务' },
+    { icon: <PlayCircleOutlineIcon />, t: '推进流程', d: '解释工作流并跟踪节点状态', prompt: '解释一下当前工作流的节点状态' },
+  ]
   return (
-    <Box sx={{ textAlign: 'center', py: { xs: 4, md: 7 } }}>
-      <Box sx={{
-        width: 68, height: 68, mx: 'auto', mb: 2.5, borderRadius: 1.5, color: '#fff',
-        background: 'linear-gradient(135deg,#635bff,#9b8cff)', display: 'grid', placeItems: 'center',
-        boxShadow: '0 12px 28px rgba(99,91,255,0.25)',
-      }}>
-        <AutoAwesomeIcon sx={{ fontSize: 32 }} />
-      </Box>
-      <Typography variant="h5" fontWeight={750}>你好，{name}</Typography>
-      <Typography variant="body2" color="text.secondary" sx={{ mt: 1, mb: 3.5, maxWidth: 460, mx: 'auto' }}>
-        我可以查询看板、创建和推进任务、解释工作流状态。直接描述目标即可。
+    <Box sx={{ textAlign: 'center', py: { xs: 3, md: 5 } }}>
+      <Box sx={{ display: 'flex', justifyContent: 'center', mb: 2 }}><PilotMark size={64} /></Box>
+      <Typography variant="overline" color="primary.main" sx={{ letterSpacing: '0.16em', fontWeight: 750 }}>FUX PILOT</Typography>
+      <Typography variant="h5" fontWeight={750} sx={{ mt: 0.5 }}>你好，{name}。今天想推进什么？</Typography>
+      <Typography variant="body2" color="text.secondary" sx={{ mt: 1, mb: 3.5, maxWidth: 500, mx: 'auto' }}>
+        我是你的工作区领航员，可以理解当前进展、创建和推进任务，也能解释工作流中正在发生什么。
       </Typography>
-      <Box sx={{ display: 'grid', gap: 1.25, gridTemplateColumns: { xs: '1fr', sm: 'repeat(3, 1fr)' }, maxWidth: 720, mx: 'auto', mb: 3.5 }}>
-        {[
-          { icon: <InsightsOutlinedIcon />, t: '查询进展', d: '汇总看板、阻塞与审核情况' },
-          { icon: <TaskAltIcon />, t: '创建任务', d: '用一句话生成规范任务卡' },
-          { icon: <PlayCircleOutlineIcon />, t: '推进流程', d: '发起工作流并跟踪节点' },
-        ].map(c => (
-          <Paper key={c.t} elevation={0} sx={{ p: 2, borderRadius: 1.5, border: '1px solid', borderColor: 'divider', textAlign: 'left' }}>
+      <Box sx={{ display: 'grid', gap: 1.25, gridTemplateColumns: { xs: '1fr', sm: 'repeat(3, 1fr)' }, maxWidth: 760, mx: 'auto', mb: 3 }}>
+        {cards.map(c => (
+          <Paper key={c.t} elevation={0} role="button" tabIndex={enabled ? 0 : -1}
+            onClick={() => { if (enabled) onPick(c.prompt) }}
+            onKeyDown={e => { if (enabled && (e.key === 'Enter' || e.key === ' ')) { e.preventDefault(); onPick(c.prompt) } }}
+            sx={{
+              p: 2, borderRadius: 1.5, border: '1px solid', borderColor: 'divider', textAlign: 'left',
+              cursor: enabled ? 'pointer' : 'default', opacity: enabled ? 1 : 0.55,
+              transition: 'border-color .15s, background-color .15s, transform .15s',
+              '&:hover': enabled ? { borderColor: 'primary.main', bgcolor: 'action.hover', transform: 'translateY(-2px)' } : {},
+            }}>
             <Box sx={{ color: 'primary.main', mb: 1 }}>{c.icon}</Box>
             <Typography variant="subtitle2" fontWeight={700}>{c.t}</Typography>
             <Typography variant="caption" color="text.secondary">{c.d}</Typography>
@@ -703,7 +742,7 @@ function EmptyIntro({ name, onPick }: { name: string; onPick: (s: string) => voi
       </Box>
       <Stack direction="row" spacing={1} sx={{ flexWrap: 'wrap', justifyContent: 'center', gap: 1 }}>
         {SUGGESTIONS.slice(0, 3).map(s => (
-          <Chip key={s} label={s} variant="outlined" onClick={() => onPick(s)}
+          <Chip key={s} label={s} variant="outlined" disabled={!enabled} onClick={() => onPick(s)}
             sx={{ '&:hover': { borderColor: 'primary.main', bgcolor: 'action.hover' } }} />
         ))}
       </Stack>
