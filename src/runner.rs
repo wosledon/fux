@@ -100,6 +100,24 @@ pub fn map_effort(effort: &str) -> String {
     }
 }
 
+/// 识别常见 ACP 认证错误，供节点页展示可操作的恢复提示。
+fn is_auth_error(message: &str) -> bool {
+    let text = message.to_lowercase();
+    [
+        "unauthorized",
+        "authentication required",
+        "authentication failed",
+        "not logged in",
+        "login required",
+        "auth_required",
+        "401",
+        "需要认证",
+        "请先登录",
+    ]
+    .iter()
+    .any(|needle| text.contains(needle))
+}
+
 /// Run 存续期间维持租约；Drop 时停止后台心跳。
 struct HeartbeatGuard(tokio::task::JoinHandle<()>);
 impl Drop for HeartbeatGuard {
@@ -397,12 +415,16 @@ async fn execute_inner(
                         error: None,
                     };
                 }
+                let message = format!("{e:#}");
+                if is_auth_error(&message) {
+                    sink.emit("auth_required", json!({ "message": &message, "cliKind": &spec.cli_kind })).await;
+                }
                 break RunOutcome {
                     status: "failed".into(),
                     stop_reason: "interrupted".into(),
                     turn_count,
                     session_id: session_id.clone(),
-                    error: Some(format!("{e:#}")),
+                    error: Some(message),
                 };
             }
             Ok(resp) => {
@@ -439,12 +461,16 @@ async fn execute_inner(
                         };
                     }
                     other => {
+                        let message = format!("stopReason={other}");
+                        if other == "auth_required" || is_auth_error(other) {
+                            sink.emit("auth_required", json!({ "message": &message, "cliKind": &spec.cli_kind })).await;
+                        }
                         break RunOutcome {
                             status: "failed".into(),
                             stop_reason: other.to_string(),
                             turn_count,
                             session_id: session_id.clone(),
-                            error: Some(format!("stopReason={other}")),
+                            error: Some(message),
                         };
                     }
                 }
@@ -459,4 +485,17 @@ async fn execute_inner(
     client.kill().await;
     pump.abort();
     Ok(outcome)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::is_auth_error;
+
+    #[test]
+    fn detects_common_cli_auth_errors() {
+        for message in ["401 Unauthorized", "Authentication required", "not logged in", "请先登录"] {
+            assert!(is_auth_error(message), "应识别认证错误: {message}");
+        }
+        assert!(!is_auth_error("git push failed"));
+    }
 }

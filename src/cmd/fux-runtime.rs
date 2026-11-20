@@ -75,6 +75,29 @@ async fn main() -> anyhow::Result<()> {
     let node_id = v["nodeId"].as_str().unwrap_or_default().to_string();
     println!("配对成功，节点 {node_id}，等待 admin 批准…");
 
+    let mut reconnect_attempt = 0u32;
+    loop {
+        match run_connection(&server, &token, &data_dir).await {
+            Ok(true) => reconnect_attempt = 0,
+            Ok(false) => {
+                println!("节点令牌已失效，runtime 退出；如需重新加入请使用新配对码。");
+                return Ok(());
+            }
+            Err(e) => eprintln!("连接控制面失败: {e:#}"),
+        }
+        let delay = reconnect_delay(reconnect_attempt);
+        println!("{delay} 秒后自动重连…");
+        tokio::time::sleep(std::time::Duration::from_secs(delay)).await;
+        reconnect_attempt = reconnect_attempt.saturating_add(1);
+    }
+}
+
+fn reconnect_delay(attempt: u32) -> u64 {
+    30.min(1u64 << attempt.min(5))
+}
+
+/// 维持一次节点通道；返回 false 表示节点已删除，不应继续重连。
+async fn run_connection(server: &str, token: &str, data_dir: &PathBuf) -> anyhow::Result<bool> {
     // 2. 出站 WS 长连接
     let ws_url = format!(
         "{}/api/v1/node-channel?token={token}",
@@ -88,7 +111,10 @@ async fn main() -> anyhow::Result<()> {
 
     let writer = tokio::spawn(async move {
         while let Some(msg) = rx.recv().await {
-            let text = serde_json::to_string(&msg).unwrap();
+            let text = match serde_json::to_string(&msg) {
+                Ok(text) => text,
+                Err(_) => continue,
+            };
             if ws_sink
                 .send(tokio_tungstenite::tungstenite::Message::Text(text.into()))
                 .await
@@ -103,21 +129,32 @@ async fn main() -> anyhow::Result<()> {
     let cancels: Cancels = Arc::new(Mutex::new(HashMap::new()));
     let active = Arc::new(std::sync::atomic::AtomicU32::new(0));
 
-    // 心跳
-    {
+    // 心跳每 10 秒续约；能力在连接建立时及此后每分钟重新探测。
+    let heartbeat = {
         let tx = tx.clone();
         let active = active.clone();
         tokio::spawn(async move {
+            let mut tick = 0u64;
             loop {
-                let _ = tx.send(RuntimeMsg::Heartbeat {
-                    load: active.load(std::sync::atomic::Ordering::Relaxed),
-                });
+                let load = active.load(std::sync::atomic::Ordering::Relaxed);
+                let _ = tx.send(RuntimeMsg::Heartbeat { load });
+                if tick % 6 == 0 {
+                    let capabilities = Capabilities {
+                        os: std::env::consts::OS.to_string(),
+                        clis: probe_clis(),
+                        project_paths: vec![],
+                        load,
+                    };
+                    let _ = tx.send(RuntimeMsg::Capabilities { capabilities });
+                }
+                tick = tick.wrapping_add(1);
                 tokio::time::sleep(std::time::Duration::from_secs(10)).await;
             }
-        });
-    }
+        })
+    };
 
     println!("已连接控制面，等待派发…");
+    let mut removed = false;
     while let Some(Ok(msg)) = ws_stream.next().await {
         let text = match msg {
             tokio_tungstenite::tungstenite::Message::Text(t) => t.to_string(),
@@ -142,6 +179,10 @@ async fn main() -> anyhow::Result<()> {
             ServerMsg::Approval { approved } => {
                 if approved {
                     println!("admin 已批准，节点上线。");
+                } else {
+                    println!("节点已被控制面移除，停止当前连接。");
+                    removed = true;
+                    break;
                 }
             }
             ServerMsg::Dispatch { spec } => {
@@ -178,8 +219,14 @@ async fn main() -> anyhow::Result<()> {
         }
     }
     writer.abort();
+    heartbeat.abort();
+    perms.lock().await.clear();
+    let mut running = cancels.lock().await;
+    for (_, cancel) in running.drain() {
+        let _ = cancel.send(());
+    }
     println!("与控制面断开。");
-    Ok(())
+    Ok(!removed)
 }
 
 async fn prepare_workdir(data_dir: &PathBuf, spec: &RunSpec) -> anyhow::Result<PathBuf> {

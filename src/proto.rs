@@ -18,6 +18,7 @@ pub enum ServerMsg {
 #[serde(tag = "type", rename_all = "snake_case")]
 pub enum RuntimeMsg {
     Heartbeat { load: u32 },
+    Capabilities { capabilities: Capabilities },
     Event { run_id: String, kind: String, payload: Value },
     RunState { run_id: String, status: String, stop_reason: String, turn_count: u32, session_id: String },
     PermissionRequest { run_id: String, request_id: String, request: Value },

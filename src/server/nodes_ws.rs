@@ -104,6 +104,13 @@ async fn handle_msg(state: &SharedState, node_id: &str, msg: RuntimeMsg) {
                     .execute(&state.db)
                     .await;
         }
+        RuntimeMsg::Capabilities { capabilities } => {
+            let _ = sqlx::query("UPDATE nodes SET capabilities = ? WHERE id = ?")
+                .bind(serde_json::to_string(&capabilities).unwrap_or_else(|_| "{}".into()))
+                .bind(node_id)
+                .execute(&state.db)
+                .await;
+        }
         RuntimeMsg::Event {
             run_id,
             kind,

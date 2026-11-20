@@ -27,6 +27,7 @@ import ExpandLessIcon from '@mui/icons-material/ExpandLess'
 import UnfoldMoreIcon from '@mui/icons-material/UnfoldMore'
 import UnfoldLessIcon from '@mui/icons-material/UnfoldLess'
 import PsychologyOutlinedIcon from '@mui/icons-material/PsychologyOutlined'
+import ContentCopyIcon from '@mui/icons-material/ContentCopy'
 import { get, post, taskEventsUrl, parseJson, STATUS_LABEL, STAGE_LABEL, STAGE_COLOR, type Task, type Run, type Project, type Envelope, type Workflow, type WorkflowStage, type Delivery, type Agent } from '../api'
 import type { WsCtx } from './WorkspaceLayout'
 import { EmptyState, PersonAvatar, StatusChip, Markdown, ToolRow, toolDetail, useToast, type ToolCallView } from '../ui'
@@ -48,6 +49,10 @@ const fmtDuration = (from?: string, to?: string) => {
 
 const fmtChars = (n: number) => n >= 10000 ? `${(n / 10000).toFixed(1)} 万字` : `${n} 字`
 
+const deliveryStateLabel = (state?: string) => ({
+  merged: '已合并', open: '待合并', closed: '已关闭', local: '本地交付',
+} as Record<string, string>)[state || ''] || state || '未交付'
+
 type ProcessItem =
   | { kind: 'message'; text: string; at: string }
   | { kind: 'thought'; text: string; at: string }
@@ -64,6 +69,7 @@ export default function TaskPage() {
   const { wsId, role } = useOutletContext<WsCtx>()
   const qc = useQueryClient()
   const toast = useToast()
+  const theme = useTheme()
   const [tab, setTab] = useState(0)
   const [events, setEvents] = useState<Envelope[]>([])
   const [expandSignal, setExpandSignal] = useState<ExpandSignal>(null)
@@ -81,6 +87,7 @@ export default function TaskPage() {
   const task = data?.task
   const deliveries = data?.deliveries || []
   const deliveriesMerged = deliveries.length > 0 && deliveries.every(d => d.prState === 'merged')
+  const deliveryReady = task?.workflowId ? deliveriesMerged : task?.prState === 'merged'
   const { data: projects = [] } = useQuery({ queryKey: ['projects', wsId], queryFn: () => get<Project[]>(`/workspaces/${wsId}/projects`) })
   const { data: agents = [] } = useQuery({ queryKey: ['agents', wsId], queryFn: () => get<Agent[]>(`/workspaces/${wsId}/agents`) })
   const { data: pr } = useQuery({ queryKey: ['pr', taskId], queryFn: () => get<any>(`/tasks/${taskId}/pull-request`), enabled: !!task && !task.workflowId })
@@ -216,39 +223,57 @@ export default function TaskPage() {
   )
 
   return (
-    <Box sx={{ height: '100%', display: 'flex', flexDirection: 'column', overflow: 'hidden' }}>
-      <Box sx={{ px: { xs: 2, md: 3 }, pt: 2.5, pb: 2.5, flexShrink: 0, bgcolor: 'background.paper', borderBottom: '1px solid', borderColor: 'divider' }}>
-        <Box sx={{ maxWidth: 1440, mx: 'auto' }}>
+    <Box sx={{ height: '100%', display: 'flex', flexDirection: 'column', overflow: 'hidden', bgcolor: 'background.default' }}>
+      <Box component="header" sx={{
+        px: { xs: 2, md: 3 }, py: 2, flexShrink: 0, bgcolor: 'background.paper',
+        borderBottom: '1px solid', borderColor: 'divider',
+      }}>
+        <Box sx={{ maxWidth: 1500, mx: 'auto' }}>
           <Box sx={{ display: 'flex', alignItems: 'center', gap: 1, mb: 1.5 }}>
-            <Tooltip title="返回上一页"><IconButton size="small" onClick={() => nav(-1)} sx={{ ml: -0.75 }}><ArrowBackIcon /></IconButton></Tooltip>
+            <Tooltip title="返回上一页">
+              <IconButton size="small" onClick={() => nav(-1)} sx={{ ml: -0.5, border: '1px solid', borderColor: 'divider' }}>
+                <ArrowBackIcon fontSize="small" />
+              </IconButton>
+            </Tooltip>
             <Typography variant="body2" color="text.secondary">任务详情</Typography>
             <Typography variant="body2" color="text.disabled">/</Typography>
-            <Typography variant="body2" color="text.secondary" sx={{ fontFamily: 'monospace' }}>#{task.id.slice(0, 8)}</Typography>
+            <Typography variant="body2" color="text.secondary" sx={{ fontFamily: 'monospace', fontSize: 12 }}>#{task.id.slice(0, 8)}</Typography>
             <Box sx={{ flexGrow: 1 }} />
-            <Tooltip title="刷新任务"><IconButton size="small" onClick={refresh}><RefreshIcon /></IconButton></Tooltip>
+            <Tooltip title="刷新任务">
+              <IconButton size="small" onClick={refresh} disabled={busy}><RefreshIcon fontSize="small" /></IconButton>
+            </Tooltip>
           </Box>
           <Box sx={{ display: 'flex', gap: 2, alignItems: 'flex-start', flexWrap: 'wrap' }}>
-            <Box sx={{ flexGrow: 1, minWidth: 260 }}>
+            <Box sx={{ flexGrow: 1, minWidth: { xs: '100%', md: 300 } }}>
               <Box sx={{ display: 'flex', gap: 1.25, flexWrap: 'wrap', alignItems: 'center' }}>
-                <Typography variant="h5" sx={{ wordBreak: 'break-word', fontSize: { xs: 22, md: 25 } }}>{task.title}</Typography>
+                <Typography variant="h5" sx={{ wordBreak: 'break-word', fontSize: { xs: 22, md: 26 }, letterSpacing: '-0.025em' }}>{task.title}</Typography>
                 <StatusChip status={task.status} />
               </Box>
-              <Box sx={{ display: 'flex', gap: 0.75, mt: 1.25, flexWrap: 'wrap', alignItems: 'center' }}>
-                <Typography variant="caption" color="text.secondary" sx={{ mr: 0.5 }}>创建于 {task.createdAt?.replace('T', ' ').slice(0, 16)}</Typography>
-                {task.prState && <Chip size="small" variant="outlined" color={task.prState === 'merged' ? 'success' : 'default'} label={`PR: ${task.prState}`} />}
-                {task.branch && <Chip size="small" variant="outlined" label={task.branch} />}
-                {task.retryCount > 0 && <Chip size="small" variant="outlined" label={`重试 ${task.retryCount}`} />}
+              <Box sx={{ display: 'flex', gap: 1.25, mt: 1, flexWrap: 'wrap', alignItems: 'center' }}>
+                <Typography variant="caption" color="text.secondary">{data?.project?.name || '未关联项目'}</Typography>
+                <Box sx={{ width: 3, height: 3, borderRadius: '50%', bgcolor: 'text.disabled' }} />
+                <Typography variant="caption" color="text.secondary">创建于 {task.createdAt?.replace('T', ' ').slice(0, 16)}</Typography>
+                {task.workflowName || data?.workflow?.name ? (
+                  <Chip size="small" variant="outlined" icon={<AccountTreeIcon sx={{ fontSize: 13 }} />} label={task.workflowName || data?.workflow?.name} />
+                ) : null}
+                {task.prState && <Chip size="small" variant="outlined" color={task.prState === 'merged' ? 'success' : 'default'} label={deliveryStateLabel(task.prState)} />}
+                {task.branch && <Chip size="small" variant="outlined" label={task.branch} sx={{ fontFamily: 'monospace', fontSize: 11 }} />}
+                {task.retryCount > 0 && <Chip size="small" variant="outlined" color="warning" label={`已重试 ${task.retryCount} 次`} />}
               </Box>
             </Box>
-            <Box sx={{ display: 'flex', gap: 1, flexWrap: 'wrap', alignItems: 'center', pt: 0.5 }}>
-              {task.status === 'planning' && <Button variant="contained" onClick={() => action(() => post(`/tasks/${taskId}/transition`, { to: 'ready' }), '已移入待办，等待智能体认领')}>规划完成 → 待办</Button>}
-              {task.status === 'blocked' && <Button variant="contained" color="warning" onClick={() => action(() => post(`/tasks/${taskId}/unblock`), '已解除阻塞')}>解除阻塞</Button>}
-              {task.status === 'in_progress' && <Button variant="outlined" color="warning" onClick={() => action(() => post(`/tasks/${taskId}/cancel-run`), '已发送取消信号')}>取消运行</Button>}
+            <Box sx={{ display: 'flex', gap: 1, flexWrap: 'wrap', alignItems: 'center', pt: 0.25 }}>
+              {task.status === 'planning' && <Button variant="contained" startIcon={<PlayArrowIcon />} disabled={busy}
+                onClick={() => action(() => post(`/tasks/${taskId}/transition`, { to: 'ready', expectedVersion: task.version }), '已移入待办，等待智能体认领')}>规划完成</Button>}
+              {task.status === 'blocked' && <Button variant="contained" color="warning" disabled={busy}
+                onClick={() => action(() => post(`/tasks/${taskId}/unblock`), '已解除阻塞')}>解除阻塞</Button>}
+              {task.status === 'in_progress' && <Button variant="outlined" color="warning" disabled={busy}
+                onClick={() => action(() => post(`/tasks/${taskId}/cancel-run`), '已发送取消信号')}>取消运行</Button>}
               {task.status === 'review' && <Button variant="contained" color="success" startIcon={<CheckCircleIcon />}
-                disabled={busy || ((task.workflowId ? !(deliveries.length > 0 && deliveries.every(d => d.prState === 'merged')) : task.prState !== 'merged') && !manualConfirm)}
-                onClick={() => action(() => post(`/tasks/${taskId}/transition`, { to: 'done', manualConfirm }), '已批准，任务完成')}>批准交付</Button>}
-              {task.status === 'review' && <Button variant="outlined" color="error" startIcon={<CancelIcon />} onClick={() => setRejectOpen(true)}>驳回</Button>}
-              {task.status === 'done' && <Button variant="outlined" onClick={() => action(() => post(`/tasks/${taskId}/archive`), '已归档')}>归档任务</Button>}
+                disabled={busy || ((task.workflowId ? !deliveriesMerged : task.prState !== 'merged') && !manualConfirm)}
+                onClick={() => action(() => post(`/tasks/${taskId}/transition`, { to: 'done', manualConfirm, expectedVersion: task.version }), '已批准，任务完成')}>批准交付</Button>}
+              {task.status === 'review' && <Button variant="outlined" color="error" startIcon={<CancelIcon />} disabled={busy} onClick={() => setRejectOpen(true)}>驳回返工</Button>}
+              {task.status === 'done' && <Button variant="outlined" disabled={busy}
+                onClick={() => action(() => post(`/tasks/${taskId}/archive`), '已归档')}>归档任务</Button>}
             </Box>
           </Box>
           {task.status === 'blocked' && task.blockReason && <Alert severity="error" sx={{ mt: 2 }}>{task.blockReason}</Alert>}
@@ -257,29 +282,46 @@ export default function TaskPage() {
 
       <Box ref={pageScrollRef} sx={{ flexGrow: 1, minHeight: 0, overflowY: 'auto', px: { xs: 2, md: 3 }, pb: 3 }}>
         <Box sx={{
-          maxWidth: 1440, mx: 'auto', mt: 2.5, display: 'grid', gap: 2.5,
-          gridTemplateColumns: { xs: 'minmax(0,1fr)', lg: 'minmax(0,1fr) 320px' }, alignItems: 'start',
+          maxWidth: 1500, mx: 'auto', mt: 3, display: 'grid', gap: 3,
+          gridTemplateColumns: { xs: 'minmax(0,1fr)', lg: 'minmax(0,1fr) 340px' }, alignItems: 'start',
         }}>
-          <Paper sx={{ minHeight: 560, display: 'flex', flexDirection: 'column', border: '1px solid', borderColor: 'divider', borderRadius: 2, overflow: 'hidden' }}>
-            <Tabs value={tab} onChange={(_, v) => setTab(v)} sx={{
-              position: 'sticky', top: 0, zIndex: 3, px: 2, borderBottom: '1px solid', borderColor: 'divider',
-              bgcolor: 'background.paper', flexShrink: 0, borderTopLeftRadius: 'inherit', borderTopRightRadius: 'inherit',
+          <Paper sx={{
+            minHeight: 600, display: 'flex', flexDirection: 'column', bgcolor: 'background.paper',
+            border: '1px solid', borderColor: 'divider', borderRadius: 2, overflow: 'hidden',
+            boxShadow: theme => `0 8px 30px ${alpha(theme.palette.text.primary, theme.palette.mode === 'dark' ? 0.08 : 0.035)}`,
+          }}>
+            <Box sx={{
+              position: 'sticky', top: 0, zIndex: 3, px: { xs: 1, md: 2 }, borderBottom: '1px solid', borderColor: 'divider',
+              bgcolor: 'background.paper', flexShrink: 0, display: 'flex', alignItems: 'center', gap: 2,
             }}>
-              <Tab label={`时间轴 ${timeline.length}`} /><Tab label="任务说明" />{task.workflowId && <Tab label="流程" />}
-            </Tabs>
+              <Tabs value={tab} onChange={(_, v) => setTab(v)} variant="scrollable" allowScrollButtonsMobile sx={{ flexGrow: 1, minWidth: 0 }}>
+                <Tab label={`实时动态  ${timeline.length}`} />
+                <Tab label="任务说明" />
+                {task.workflowId && <Tab label="执行流程" />}
+              </Tabs>
+              <Box sx={{ display: { xs: 'none', md: 'flex' }, alignItems: 'center', gap: 0.75, pr: 1, flexShrink: 0 }}>
+                <Box sx={{ width: 6, height: 6, borderRadius: '50%', bgcolor: 'success.main', boxShadow: theme => `0 0 0 3px ${alpha(theme.palette.success.main, 0.12)}` }} />
+                <Typography variant="caption" color="text.secondary">实时更新</Typography>
+              </Box>
+            </Box>
 
       {tab === 0 && (
         <>
-          <Box sx={{ p: { xs: 2, md: 3 } }}>
+          <Box sx={{ p: { xs: 2, md: 3 }, flexGrow: 1 }}>
             {data?.workflow && (
               <WorkflowStatusPanel workflow={data.workflow} runs={data.runs || []} projects={projects} agents={agents}
                 taskStatus={task.status} onDetail={() => setTab(2)} />
             )}
-            <Box sx={{ display: 'flex', alignItems: 'center', gap: 1, mb: 1.75 }}>
-              <Typography variant="subtitle2" sx={{ flexGrow: 1 }}>活动时间轴</Typography>
-              <Typography variant="caption" color="text.secondary">共 {events.length} 条动态 · {timeline.filter(e => e.type === 'run').length} 个 Run</Typography>
-              <Tooltip title="展开全部过程"><IconButton size="small" onClick={() => setExpandSignal(s => ({ open: true, n: (s?.n || 0) + 1 }))}><UnfoldMoreIcon fontSize="small" /></IconButton></Tooltip>
-              <Tooltip title="折叠全部过程"><IconButton size="small" onClick={() => setExpandSignal(s => ({ open: false, n: (s?.n || 0) + 1 }))}><UnfoldLessIcon fontSize="small" /></IconButton></Tooltip>
+            <Box sx={{ mb: 2.5, mt: data?.workflow ? 0 : 0.5 }}>
+              <Box sx={{ display: 'flex', alignItems: 'center', gap: 1 }}>
+                <Typography variant="subtitle1" sx={{ fontSize: 15, flexGrow: 1 }}>任务动态</Typography>
+                <Chip size="small" variant="outlined" label={`${events.length} 条动态`} />
+                <Chip size="small" variant="outlined" label={`${timeline.filter(e => e.type === 'run').length} 次运行`} sx={{ display: { xs: 'none', sm: 'inline-flex' } }} />
+                <Divider orientation="vertical" flexItem sx={{ mx: 0.25, display: { xs: 'none', sm: 'block' } }} />
+                <Tooltip title="展开全部过程"><IconButton size="small" onClick={() => setExpandSignal(s => ({ open: true, n: (s?.n || 0) + 1 }))}><UnfoldMoreIcon fontSize="small" /></IconButton></Tooltip>
+                <Tooltip title="折叠全部过程"><IconButton size="small" onClick={() => setExpandSignal(s => ({ open: false, n: (s?.n || 0) + 1 }))}><UnfoldLessIcon fontSize="small" /></IconButton></Tooltip>
+              </Box>
+              <Typography variant="caption" color="text.secondary" sx={{ display: 'block', mt: 0.5 }}>执行输出、工具调用与状态变化按时间聚合</Typography>
             </Box>
             {timeline.length === 0 && <EmptyState title="还没有任务动态" desc="智能体输出、工具调用、评论和状态变化会实时出现在这里。" />}
             {timeline.length > 0 && (
@@ -473,11 +515,21 @@ export default function TaskPage() {
             <div ref={bottomRef} />
           </Box>
           <Box sx={{ p: 2, borderTop: '1px solid', borderColor: 'divider', bgcolor: 'background.paper', flexShrink: 0 }}>
-            <Typography variant="caption" color="text.secondary" display="block" sx={{ mb: 1 }}>{commentHint}</Typography>
-            <Box sx={{ display: 'flex', gap: 1, alignItems: 'flex-end' }}>
-              <TextField fullWidth multiline maxRows={4} placeholder="输入评论，引导智能体或记录评审意见…" value={comment} onChange={e => setComment(e.target.value)}
+            <Box sx={{ display: 'flex', alignItems: 'center', gap: 1, mb: 1 }}>
+              <SmartToyIcon sx={{ fontSize: 15, color: 'primary.main', flexShrink: 0 }} />
+              <Typography variant="caption" color="text.secondary" sx={{ flexGrow: 1 }}>{commentHint}</Typography>
+              <Typography variant="caption" color="text.disabled" sx={{ display: { xs: 'none', sm: 'block' }, flexShrink: 0 }}>Ctrl + Enter 发送</Typography>
+            </Box>
+            <Box sx={{
+              display: 'flex', gap: 1, alignItems: 'flex-end', p: 0.75, pl: 1.5,
+              border: '1px solid', borderColor: 'divider', borderRadius: 2, bgcolor: 'background.default',
+              transition: 'border-color .15s, box-shadow .15s',
+              '&:focus-within': { borderColor: 'primary.main', boxShadow: theme => `0 0 0 3px ${alpha(theme.palette.primary.main, 0.09)}` },
+            }}>
+              <TextField fullWidth multiline maxRows={5} variant="standard" placeholder="输入评论，引导智能体或记录评审意见…" value={comment} onChange={e => setComment(e.target.value)}
+                slotProps={{ input: { disableUnderline: true, sx: { py: 0.75, fontSize: 14 } } }}
                 onKeyDown={e => { if (e.key === 'Enter' && (e.ctrlKey || e.metaKey)) { e.preventDefault(); void sendComment() } }} />
-              <Button variant="contained" onClick={() => void sendComment()} disabled={busy || !comment.trim()} sx={{ minWidth: 44, px: 0, height: 40 }} aria-label="发送评论"><SendIcon fontSize="small" /></Button>
+              <Button variant="contained" onClick={() => void sendComment()} disabled={busy || !comment.trim()} sx={{ minWidth: 38, width: 38, minHeight: 38, height: 38, px: 0 }} aria-label="发送评论"><SendIcon fontSize="small" /></Button>
             </Box>
           </Box>
         </>
@@ -485,11 +537,31 @@ export default function TaskPage() {
 
       {tab === 1 && (
         <Box sx={{ p: { xs: 2.5, md: 3.5 } }}>
-          <Typography variant="subtitle2" gutterBottom>任务内容</Typography>
-          <Typography variant="body2" color={task.content ? 'text.primary' : 'text.secondary'} sx={{ whiteSpace: 'pre-wrap', wordBreak: 'break-word', lineHeight: 1.85, mt: 2 }}>{task.content || '这个任务还没有填写详细内容。'}</Typography>
+          <Box sx={{ display: 'flex', alignItems: 'center', gap: 1, mb: 2 }}>
+            <Box sx={{ flexGrow: 1 }}>
+              <Typography variant="subtitle1" sx={{ fontSize: 15 }}>任务内容</Typography>
+              <Typography variant="caption" color="text.secondary">智能体执行时使用的完整需求与上下文</Typography>
+            </Box>
+            {task.content && <Chip size="small" variant="outlined" label={`${task.content.length} 字`} />}
+          </Box>
+          {task.content ? (
+            <Paper elevation={0} sx={{ p: { xs: 2, md: 3 }, bgcolor: 'background.default', border: '1px solid', borderColor: 'divider', borderRadius: 1.5, whiteSpace: 'pre-wrap' }}>
+              <Markdown text={task.content} />
+            </Paper>
+          ) : (
+            <EmptyState title="还没有任务说明" desc="可在看板中编辑任务，补充需求背景、验收标准和相关上下文。" />
+          )}
           <Divider sx={{ my: 3 }} />
           <Typography variant="caption" color="text.secondary" display="block" sx={{ mb: 0.75 }}>完整任务 ID</Typography>
-          <Typography variant="body2" sx={{ fontFamily: 'monospace', wordBreak: 'break-all' }}>{task.id}</Typography>
+          <Box sx={{ display: 'flex', alignItems: 'center', gap: 1 }}>
+            <Typography variant="body2" sx={{ fontFamily: 'monospace', wordBreak: 'break-all', color: 'text.secondary' }}>{task.id}</Typography>
+            <Tooltip title="复制任务 ID">
+              <IconButton size="small" onClick={async () => {
+                try { await navigator.clipboard.writeText(task.id); toast('任务 ID 已复制', 'success') }
+                catch { toast('复制失败，请手动复制', 'error') }
+              }}><ContentCopyIcon sx={{ fontSize: 15 }} /></IconButton>
+            </Tooltip>
+          </Box>
         </Box>
       )}
 
@@ -509,74 +581,123 @@ export default function TaskPage() {
 
           <Box component="aside" sx={{
             display: 'flex', flexDirection: 'column', gap: 2, pb: 0.5,
-            position: { xs: 'static', lg: 'sticky' }, top: { lg: 16 }, alignSelf: 'start',
-            maxHeight: { lg: 'calc(100vh - 220px)' }, overflowY: { xs: 'visible', lg: 'auto' },
+            position: { xs: 'static', lg: 'sticky' }, top: { lg: 24 }, alignSelf: 'start',
+            maxHeight: { lg: 'calc(100vh - 205px)' }, overflowY: { xs: 'visible', lg: 'auto' },
           }}>
-            <Paper elevation={0} sx={{ p: 2.25, bgcolor: 'background.paper', border: '1px solid', borderColor: 'divider', borderRadius: 2, flexShrink: 0 }}>
-              <Box sx={{ display: 'flex', alignItems: 'center', gap: 1, mb: 2 }}>
-                <RateReviewIcon sx={{ fontSize: 19, color: 'primary.main' }} />
-                <Typography variant="subtitle2" sx={{ flexGrow: 1 }}>交付审核</Typography>
-                <Chip size="small" label={task.prState || '未交付'} color={task.prState === 'merged' ? 'success' : 'default'} variant={task.prState === 'merged' ? 'filled' : 'outlined'} />
+            <Paper elevation={0} sx={{
+              p: 2.25, bgcolor: 'background.paper', border: '1px solid', borderColor: 'divider', borderRadius: 2, flexShrink: 0,
+              boxShadow: theme => task.status === 'review' ? `inset 3px 0 0 ${theme.palette.secondary.main}` : 'none',
+            }}>
+              <Box sx={{ display: 'flex', alignItems: 'center', gap: 1.25, mb: 2 }}>
+                <Box sx={{ width: 32, height: 32, borderRadius: 1.25, display: 'grid', placeItems: 'center', bgcolor: 'action.selected', color: 'primary.main' }}>
+                  <RateReviewIcon sx={{ fontSize: 18 }} />
+                </Box>
+                <Box sx={{ flexGrow: 1 }}>
+                  <Typography variant="subtitle2">交付与审核</Typography>
+                  <Typography variant="caption" color="text.secondary">确认成果已完整交付</Typography>
+                </Box>
+                <Chip size="small" label={deliveryStateLabel(deliveriesMerged ? 'merged' : deliveries.find(d => d.prState !== 'merged')?.prState || task.prState)}
+                  color={deliveryReady ? 'success' : 'default'} variant={deliveryReady ? 'filled' : 'outlined'} />
               </Box>
+
+              <Box sx={{ p: 1.5, mb: 1.75, borderRadius: 1.5, bgcolor: deliveryReady ? alpha(theme.palette.success.main, theme.palette.mode === 'dark' ? 0.10 : 0.06) : 'action.hover' }}>
+                <Typography variant="body2" fontWeight={650}>{deliveryReady ? '交付已就绪' : task.prState === 'local' ? '本地成果待确认' : '等待交付合并'}</Typography>
+                <Typography variant="caption" color="text.secondary" sx={{ display: 'block', mt: 0.25, lineHeight: 1.6 }}>
+                  {deliveryReady ? '所有交付均已合并，可以批准并完成任务。' : task.prState === 'local' ? '核对变更后，由管理员人工确认即可批准。' : '检测或补充 PR/MR 状态后再批准交付。'}
+                </Typography>
+              </Box>
+
               {deliveries.length > 0 ? (
-                <Box sx={{ display: 'grid', gap: 1.5 }}>
+                <Box sx={{ display: 'grid', gap: 1.25 }}>
+                  {deliveries.length > 1 && (
+                    <Box sx={{ mb: 0.25 }}>
+                      <Box sx={{ display: 'flex', justifyContent: 'space-between', mb: 0.75 }}>
+                        <Typography variant="caption" color="text.secondary">合并进度</Typography>
+                        <Typography variant="caption" fontWeight={650}>{deliveries.filter(d => d.prState === 'merged').length}/{deliveries.length}</Typography>
+                      </Box>
+                      <LinearProgress variant="determinate" color="success" value={(deliveries.filter(d => d.prState === 'merged').length / deliveries.length) * 100} sx={{ height: 5, borderRadius: 3 }} />
+                    </Box>
+                  )}
                   {deliveries.map(d => (
                     <DeliveryRow key={d.id} d={d} projectName={projects.find(p => p.id === d.projectId)?.name || d.projectId} onSaved={refresh} />
                   ))}
-                  <Button size="small" variant="outlined" startIcon={<RefreshIcon />}
+                  <Button size="small" variant="outlined" startIcon={<RefreshIcon />} disabled={busy}
                     onClick={() => action(() => post(`/tasks/${taskId}/check-merge`), '合并检测完成')}>检测全部交付</Button>
                   {task.status === 'review' && !deliveriesMerged && isAdmin && (
                     <FormControlLabel control={<Checkbox size="small" checked={manualConfirm} onChange={e => setManualConfirm(e.target.checked)} />}
-                      label={<Typography variant="caption">人工确认全部已合并（保留审计记录）</Typography>} sx={{ alignItems: 'flex-start', '& .MuiCheckbox-root': { mt: -0.5 } }} />
+                      label={<Typography variant="caption">人工确认全部已合并（保留审计记录）</Typography>} sx={{ alignItems: 'flex-start', mt: 0.25, '& .MuiCheckbox-root': { mt: -0.5 } }} />
                   )}
                   {task.status === 'review' && !deliveriesMerged && !isAdmin && (
                     <Typography variant="caption" color="text.secondary">尚未全部合并；需管理员人工确认或等待自动检测。</Typography>
                   )}
                 </Box>
               ) : (
-              <Box sx={{ display: 'grid', gap: 1.25 }}>
-                <MetaRow k="分支" v={<code>{task.branch || '—'}</code>} />
-                {pr?.prUrl && <MetaRow k="链接" v={<Link href={pr.prUrl} target="_blank" rel="noreferrer">打开 PR/MR <OpenInNewIcon sx={{ fontSize: 12 }} /></Link>} />}
-                {!pr?.prUrl && pr?.createUrl && task.status === 'review' && (
-                  <MetaRow k="创建" v={<Link href={pr.createUrl} target="_blank" rel="noreferrer">从分支创建 PR/MR <OpenInNewIcon sx={{ fontSize: 12 }} /></Link>} />
-                )}
-                {task.mergeCommit && <MetaRow k="合并提交" v={<code>{task.mergeCommit.slice(0, 12)}</code>} />}
-                <Button size="small" variant="outlined" startIcon={<RefreshIcon />} sx={{ mt: 0.5 }} onClick={() => action(() => post(`/tasks/${taskId}/check-merge`), '合并检测完成')}>检测合并状态</Button>
-                {task.status === 'review' && task.prState !== 'merged' && isAdmin && (
-                  <FormControlLabel control={<Checkbox size="small" checked={manualConfirm} onChange={e => setManualConfirm(e.target.checked)} />}
-                    label={<Typography variant="caption">人工确认已合并（保留审计记录）</Typography>} sx={{ alignItems: 'flex-start', '& .MuiCheckbox-root': { mt: -0.5 } }} />
-                )}
-                {task.status === 'review' && task.prState !== 'merged' && !isAdmin && (
-                  <Typography variant="caption" color="text.secondary">尚未检测到合并；需管理员人工确认或等待自动检测。</Typography>
-                )}
-              </Box>
+                <Box sx={{ display: 'grid', gap: 1.25 }}>
+                  <MetaRow k="分支" v={<code>{task.branch || '—'}</code>} />
+                  {pr?.prUrl && <MetaRow k="链接" v={<Link href={pr.prUrl} target="_blank" rel="noreferrer">打开 PR/MR <OpenInNewIcon sx={{ fontSize: 12 }} /></Link>} />}
+                  {!pr?.prUrl && pr?.createUrl && task.status === 'review' && (
+                    <MetaRow k="创建" v={<Link href={pr.createUrl} target="_blank" rel="noreferrer">从分支创建 PR/MR <OpenInNewIcon sx={{ fontSize: 12 }} /></Link>} />
+                  )}
+                  {task.mergeCommit && <MetaRow k="合并提交" v={<code>{task.mergeCommit.slice(0, 12)}</code>} />}
+                  <Button size="small" variant="outlined" startIcon={<RefreshIcon />} disabled={busy} onClick={() => action(() => post(`/tasks/${taskId}/check-merge`), '合并检测完成')}>检测合并状态</Button>
+                  {task.status === 'review' && task.prState !== 'merged' && isAdmin && (
+                    <FormControlLabel control={<Checkbox size="small" checked={manualConfirm} onChange={e => setManualConfirm(e.target.checked)} />}
+                      label={<Typography variant="caption">人工确认已合并（保留审计记录）</Typography>} sx={{ alignItems: 'flex-start', mt: 0.25, '& .MuiCheckbox-root': { mt: -0.5 } }} />
+                  )}
+                  {task.status === 'review' && task.prState !== 'merged' && !isAdmin && (
+                    <Typography variant="caption" color="text.secondary">尚未检测到合并；需管理员人工确认或等待自动检测。</Typography>
+                  )}
+                </Box>
               )}
             </Paper>
 
             <Paper elevation={0} sx={{ p: 2.25, bgcolor: 'background.paper', border: '1px solid', borderColor: 'divider', borderRadius: 2, flexShrink: 0 }}>
-              <Typography variant="subtitle2" gutterBottom sx={{ mb: 2 }}>任务信息</Typography>
-              <Box sx={{ display: 'grid', gap: 1.25 }}>
-                <MetaRow k="项目" v={data?.project?.name || '—'} />
+              <Box sx={{ display: 'flex', alignItems: 'center', mb: 2 }}>
+                <Typography variant="subtitle2" sx={{ flexGrow: 1 }}>任务信息</Typography>
+                <Typography variant="caption" color="text.disabled" sx={{ fontFamily: 'monospace' }}>v{task.version}</Typography>
+              </Box>
+              <Box sx={{ display: 'grid', gap: 1.5 }}>
+                <MetaRow k="所属项目" v={data?.project?.name || '—'} />
                 <MetaRow k="优先级" v={task.priority === 0 ? '普通' : `P${task.priority}`} />
-                <MetaRow k="标签" v={parseJson<string[]>(task.tags, []).join(', ') || '—'} />
+                <MetaRow k="标签" v={parseJson<string[]>(task.tags, []).length > 0 ? (
+                  <Box sx={{ display: 'flex', flexWrap: 'wrap', gap: 0.5 }}>
+                    {parseJson<string[]>(task.tags, []).map(tag => <Chip key={tag} size="small" variant="outlined" label={tag} sx={{ height: 21, fontSize: 11 }} />)}
+                  </Box>
+                ) : '—'} />
                 <MetaRow k="创建时间" v={task.createdAt?.replace('T', ' ').slice(0, 16)} />
-                <MetaRow k="版本" v={`v${task.version}`} />
+                <MetaRow k="最近更新" v={task.updatedAt?.replace('T', ' ').slice(0, 16)} />
               </Box>
             </Paper>
 
             <Paper elevation={0} sx={{ p: 2.25, bgcolor: 'background.paper', border: '1px solid', borderColor: 'divider', borderRadius: 2, flexShrink: 0 }}>
-              <Typography variant="subtitle2" gutterBottom sx={{ mb: 1.5 }}>运行记录（{data?.runs.length || 0}）</Typography>
-              {(data?.runs || []).map(r => (
-                <Box key={r.id} sx={{ py: 1.25, borderBottom: '1px solid', borderColor: 'divider', '&:last-child': { borderBottom: 0, pb: 0 } }}>
-                  <Box sx={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 1 }}>
-                    <Chip size="small" label={r.status} color={r.status === 'finished' ? 'success' : r.status === 'running' ? 'primary' : 'error'} />
-                    <Typography variant="caption" color="text.secondary">{r.startedAt?.replace('T', ' ').slice(5, 16)}</Typography>
+              <Box sx={{ display: 'flex', alignItems: 'center', gap: 1, mb: 1.75 }}>
+                <Typography variant="subtitle2" sx={{ flexGrow: 1 }}>运行记录</Typography>
+                <Chip size="small" variant="outlined" label={`${data?.runs.length || 0} 次`} sx={{ height: 21 }} />
+              </Box>
+              <Box sx={{ display: 'grid', gap: 1, maxHeight: 300, overflowY: 'auto', pr: 0.25 }}>
+                {(data?.runs || []).map(r => (
+                  <Box key={r.id} sx={{ p: 1.25, border: '1px solid', borderColor: 'divider', borderRadius: 1.25, bgcolor: 'background.default' }}>
+                    <Box sx={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 1 }}>
+                      <Typography variant="caption" fontWeight={650} sx={{ minWidth: 0, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+                        {r.stageKey || '任务执行'}
+                      </Typography>
+                      <Chip size="small" label={RUN_STATUS_META[r.status]?.label || r.status}
+                        color={r.status === 'finished' ? 'success' : r.status === 'running' ? 'primary' : ['failed', 'cancelled'].includes(r.status) ? 'error' : 'default'}
+                        sx={{ height: 20, fontSize: 10.5, flexShrink: 0 }} />
+                    </Box>
+                    <Typography variant="caption" color="text.secondary" display="block" sx={{ mt: 0.75 }}>
+                      {agents.find(a => a.id === r.agentId)?.name || '智能体'} · {r.nodeId === 'local' ? '本地节点' : '远程节点'}
+                    </Typography>
+                    <Typography variant="caption" color="text.disabled" display="block" sx={{ mt: 0.25 }}>
+                      {r.startedAt?.replace('T', ' ').slice(5, 16)} · {r.turnCount} 轮
+                      {fmtDuration(r.startedAt, r.endedAt) ? ` · ${fmtDuration(r.startedAt, r.endedAt)}` : ''}
+                      {r.usageTokens > 0 ? ` · ${r.usageTokens} tokens` : ''}
+                      {r.retryCount > 0 ? ` · 重试 #${r.retryCount}` : ''}
+                    </Typography>
+                    {r.stopReason && <Typography variant="caption" color="text.secondary" display="block" sx={{ mt: 0.5 }}>{r.stopReason}</Typography>}
                   </Box>
-                  <Typography variant="caption" color="text.secondary" display="block" sx={{ mt: 0.75 }}>
-                    {r.nodeId === 'local' ? '本地节点' : '远程节点'} · {r.turnCount} 轮{r.stageKey ? ` · 节点 ${r.stageKey}` : ''}{r.retryCount > 0 ? ` · 重试 #${r.retryCount}` : ''}{r.stopReason ? ` · ${r.stopReason}` : ''}
-                  </Typography>
-                </Box>
-              ))}
+                ))}
+              </Box>
               {(data?.runs || []).length === 0 && <Typography variant="body2" color="text.secondary">还没有运行记录</Typography>}
             </Paper>
           </Box>
@@ -590,10 +711,10 @@ export default function TaskPage() {
         </DialogContent>
         <DialogActions sx={{ px: 3, pb: 2 }}>
           <Button onClick={() => setRejectOpen(false)}>取消</Button>
-          <Button variant="contained" color="error" disabled={!rejectReason.trim()} onClick={async () => {
-            await action(() => post(`/tasks/${taskId}/transition`, { to: 'ready', reason: rejectReason }), '已驳回，任务回到待办')
+          <Button variant="contained" color="error" disabled={!rejectReason.trim() || busy} onClick={async () => {
+            await action(() => post(`/tasks/${taskId}/transition`, { to: 'ready', reason: rejectReason, expectedVersion: task.version }), '已驳回，任务回到待办')
             setRejectOpen(false); setRejectReason('')
-          }}>驳回</Button>
+          }}>确认驳回</Button>
         </DialogActions>
       </Dialog>
     </Box>
@@ -644,6 +765,7 @@ const RUN_STATUS_META: Record<string, { label: string; tone: TimelineTone }> = {
   finished: { label: '完成', tone: 'success' },
   cancelled: { label: '已取消', tone: 'error' },
   failed: { label: '失败', tone: 'error' },
+  skipped: { label: '已跳过', tone: 'muted' },
 }
 
 /** Run 里程碑：头部始终可见；思考与工具调用可折叠，智能体输出始终展示。 */
@@ -697,8 +819,10 @@ function RunTimelineGroup({ entry, run, signal }: { entry: RunEntry; run?: Run; 
           {stats.length > 0 && <Typography variant="caption" color="text.secondary" sx={{ display: 'block', mt: 0.25 }}>{stats.join(' · ')}</Typography>}
         </Box>
       </Box>
-      <Box sx={{ ml: '40px', mt: 1 }}>
-        <RunProcessBody items={entry.items} live={live} signal={signal} />
+      <Box sx={{ ml: '40px', mt: 1.25 }}>
+        <Paper elevation={0} sx={{ p: 1.5, bgcolor: 'background.default', border: '1px solid', borderColor: 'divider', borderRadius: 1.5 }}>
+          <RunProcessBody items={entry.items} live={live} signal={signal} />
+        </Paper>
       </Box>
     </Box>
   )
@@ -879,7 +1003,7 @@ function useStageStatus(runs: Run[]) {
 function WorkflowStatusPanel({ workflow, runs, projects, agents, taskStatus, onDetail }: {
   workflow: Workflow; runs: Run[]; projects: Project[]; agents: Agent[]; taskStatus: string; onDetail: () => void
 }) {
-  const [open, setOpen] = useState(true)
+  const [open, setOpen] = useState(taskStatus === 'in_progress' || taskStatus === 'blocked')
   const stages = useMemo(() => autoLayout(parseJson<WorkflowStage[]>(workflow.stages, [])), [workflow.stages])
   const { statusOf, metaOf } = useStageStatus(runs)
   const done = stages.filter(s => ['succeeded', 'skipped'].includes(statusOf(s.key))).length
@@ -892,19 +1016,22 @@ function WorkflowStatusPanel({ workflow, runs, projects, agents, taskStatus, onD
   const contentBottom = Math.max(0, ...stages.map(s => (s.y ?? 0) + NODE_H_STATUS))
   const canvasHeight = Math.min(440, Math.max(260, contentBottom + 80))
   return (
-    <Paper elevation={0} sx={{ mb: 2.5, border: '1px solid', borderColor: 'divider', borderRadius: 1.5, overflow: 'hidden' }}>
-      <Box sx={{ px: 2, py: 1.25, display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 1, flexWrap: 'wrap', bgcolor: 'background.paper' }}>
-        <AccountTreeIcon sx={{ fontSize: 18, color: 'primary.main' }} />
-        <Typography variant="subtitle2" noWrap sx={{ flexGrow: 1, minWidth: 100 }}>工作流状态</Typography>
-        <Chip size="small" variant="outlined" label={`${done}/${stages.length} 节点`}
-          color={failed ? 'error' : allDone ? 'success' : 'default'} sx={{ height: 22, flexShrink: 0 }} />
-        <Chip size="small" label={summary} color={failed ? 'error' : running ? 'primary' : 'default'} sx={{ height: 22, flexShrink: 0 }} />
-        <Button size="small" onClick={onDetail} sx={{ flexShrink: 0 }}>流程详情</Button>
+    <Paper elevation={0} sx={{ mb: 3, border: '1px solid', borderColor: 'divider', borderRadius: 1.5, overflow: 'hidden', bgcolor: 'background.default' }}>
+      <Box sx={{ px: 2, py: 1.5, display: 'flex', alignItems: 'center', gap: 1.25, flexWrap: 'wrap', bgcolor: 'background.paper' }}>
+        <Box sx={{ width: 30, height: 30, borderRadius: 1, display: 'grid', placeItems: 'center', bgcolor: 'action.selected', color: 'primary.main' }}>
+          <AccountTreeIcon sx={{ fontSize: 17 }} />
+        </Box>
+        <Box sx={{ flexGrow: 1, minWidth: 140 }}>
+          <Typography variant="subtitle2" noWrap>{workflow.name}</Typography>
+          <Typography variant="caption" color="text.secondary">工作流 · {done}/{stages.length} 节点完成</Typography>
+        </Box>
+        <Chip size="small" label={summary} color={failed ? 'error' : allDone ? 'success' : running ? 'primary' : 'default'} sx={{ height: 23, flexShrink: 0 }} />
+        <Button size="small" onClick={onDetail} sx={{ flexShrink: 0 }}>查看流程</Button>
         <IconButton size="small" onClick={() => setOpen(v => !v)} aria-label={open ? '收起工作流状态' : '展开工作流状态'} sx={{ flexShrink: 0 }}>
           {open ? <ExpandLessIcon fontSize="small" /> : <ExpandMoreIcon fontSize="small" />}
         </IconButton>
       </Box>
-      <LinearProgress variant="determinate" value={pct} color={barColor} sx={{ height: 3 }} />
+      <LinearProgress variant="determinate" value={pct} color={barColor} sx={{ height: 4 }} />
       {open && (
         <>
           <Box sx={{ display: 'flex', gap: 2, px: 2, py: 1, flexWrap: 'wrap', borderBottom: '1px solid', borderColor: 'divider', bgcolor: 'background.paper' }}>
@@ -927,9 +1054,9 @@ function WorkflowStatusPanel({ workflow, runs, projects, agents, taskStatus, onD
 
 function MetaRow({ k, v }: { k: string; v: React.ReactNode }) {
   return (
-    <Box sx={{ display: 'flex', gap: 2, alignItems: 'center' }}>
-      <Typography variant="caption" color="text.secondary" sx={{ width: 72, flexShrink: 0 }}>{k}</Typography>
-      <Box sx={{ minWidth: 0, wordBreak: 'break-all' }}>{typeof v === 'string' ? <Typography variant="body2">{v}</Typography> : v}</Box>
+    <Box sx={{ display: 'flex', gap: 1.5, alignItems: 'flex-start' }}>
+      <Typography variant="caption" color="text.secondary" sx={{ width: 64, flexShrink: 0, pt: 0.25 }}>{k}</Typography>
+      <Box sx={{ minWidth: 0, wordBreak: 'break-word', flexGrow: 1 }}>{typeof v === 'string' ? <Typography variant="body2">{v}</Typography> : v}</Box>
     </Box>
   )
 }
@@ -947,20 +1074,25 @@ function DeliveryRow({ d, projectName, onSaved }: { d: Delivery; projectName: st
     } catch (e: any) { toast(e.message, 'error') } finally { setBusy(false) }
   }
   return (
-    <Box sx={{ p: 1.25, border: '1px solid', borderColor: 'divider', borderRadius: 1.25 }}>
+    <Box sx={{ p: 1.25, border: '1px solid', borderColor: 'divider', borderRadius: 1.25, bgcolor: 'background.default' }}>
       <Box sx={{ display: 'flex', gap: 0.75, alignItems: 'center', mb: 0.75 }}>
-        <Typography variant="body2" fontWeight={650} sx={{ flexGrow: 1 }}>{projectName}</Typography>
-        <Chip size="small" variant="outlined" label={d.prState || '未交付'} color={d.prState === 'merged' ? 'success' : 'default'} />
+        {d.prState === 'merged'
+          ? <CheckCircleIcon sx={{ fontSize: 16, color: 'success.main', flexShrink: 0 }} />
+          : <LinkOutlinedIcon sx={{ fontSize: 16, color: 'text.secondary', flexShrink: 0 }} />}
+        <Typography variant="body2" fontWeight={650} sx={{ flexGrow: 1, minWidth: 0 }}>{projectName}</Typography>
+        <Chip size="small" variant={d.prState === 'merged' ? 'filled' : 'outlined'} label={deliveryStateLabel(d.prState)} color={d.prState === 'merged' ? 'success' : 'default'} sx={{ height: 21, fontSize: 10.5 }} />
       </Box>
-      <Typography variant="caption" color="text.secondary" display="block">节点 {d.nodeKey} · <code>{d.branch || '—'}</code></Typography>
+      <Typography variant="caption" color="text.secondary" display="block" sx={{ overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+        {d.nodeKey} · <code>{d.branch || '—'}</code>
+      </Typography>
       {d.prState !== 'merged' && (
         <Box sx={{ display: 'flex', gap: 0.75, mt: 1 }}>
           <TextField size="small" fullWidth placeholder="粘贴 PR/MR 链接" value={url} onChange={e => setUrl(e.target.value)} />
           <Button size="small" variant="outlined" disabled={busy || !url.trim()} onClick={() => void save()}>保存</Button>
         </Box>
       )}
-      {d.prUrl && <Link href={d.prUrl} target="_blank" rel="noreferrer" variant="body2" sx={{ mt: 0.75, display: 'inline-block' }}>打开 PR/MR <OpenInNewIcon sx={{ fontSize: 12 }} /></Link>}
-      {d.prState === 'merged' && d.mergeCommit && <Typography variant="caption" color="text.secondary" display="block">合并提交 {d.mergeCommit.slice(0, 10)}</Typography>}
+      {d.prUrl && <Link href={d.prUrl} target="_blank" rel="noreferrer" variant="body2" sx={{ mt: 0.75, display: 'inline-flex', alignItems: 'center', gap: 0.25 }}>打开 PR/MR <OpenInNewIcon sx={{ fontSize: 12 }} /></Link>}
+      {d.prState === 'merged' && d.mergeCommit && <Typography variant="caption" color="text.secondary" display="block" sx={{ mt: 0.5 }}>合并提交 <code>{d.mergeCommit.slice(0, 10)}</code></Typography>}
     </Box>
   )
 }
