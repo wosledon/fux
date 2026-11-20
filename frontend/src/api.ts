@@ -69,9 +69,14 @@ export interface WorkflowVariable {
   key: string; label: string; description?: string
   required?: boolean; default?: string; options?: string[]
 }
+export type WorkflowStageKind = 'agent' | 'condition'
+export interface WorkflowCondition {
+  left: string; op: 'eq' | 'neq' | 'contains' | 'exists'; right?: string
+}
 export interface WorkflowStage {
-  key: string; name: string; agentId: string; projectId?: string
+  key: string; name: string; kind?: WorkflowStageKind; agentId: string; projectId?: string
   promptAppend?: string; dependsOn: string[]; when?: string
+  condition?: WorkflowCondition; cases?: Record<string, string>
   maxRetries?: number; x?: number; y?: number
 }
 export interface Workflow {

@@ -89,22 +89,38 @@ pub fn tools() -> Value {
     });
     let stages_schema = json!({
         "type": "array",
-        "description": "节点数组。每个节点绑定智能体，可选执行项目、追加提示词、依赖、跳过条件与重试次数；依赖满足即并行",
+        "description": "节点数组。agent 节点绑定智能体；condition 为逻辑判断节点，通过 cases 的 true/false 分支连接后续节点",
         "items": {
             "type": "object",
             "properties": {
                 "key": p_str("节点唯一 key，如 design"),
                 "name": p_str("节点显示名"),
-                "agentId": p_str("绑定智能体 ID"),
+                "kind": json!({ "type": "string", "enum": ["agent", "condition"], "description": "节点类型，缺省 agent" }),
+                "agentId": p_str("agent 节点绑定智能体 ID"),
                 "projectId": p_str("执行项目 ID；省略则继承任务主项目"),
                 "promptAppend": p_str("追加到该节点的提示词"),
-                "dependsOn": p_str_arr("依赖的上游节点 key 列表"),
-                "when": p_str("跳过条件，如 tag:ui / path:docs/ / var:mode=fast"),
+                "dependsOn": p_str_arr("普通上游节点 key 列表"),
+                "when": p_str("agent 节点跳过条件，如 tag:ui / path:docs/ / var:mode=fast"),
+                "condition": json!({
+                    "type": "object",
+                    "description": "condition 节点判断条件",
+                    "properties": {
+                        "left": p_str("发起变量 key"),
+                        "op": json!({ "type": "string", "enum": ["eq", "neq", "contains", "exists"] }),
+                        "right": p_str("比较值；exists 可省略"),
+                    },
+                    "required": ["left", "op"],
+                }),
+                "cases": json!({
+                    "type": "object",
+                    "description": "condition 节点分支：{ true: 目标节点 key, false: 目标节点 key }",
+                    "properties": { "true": p_str("条件成立的目标节点"), "false": p_str("条件不成立的目标节点") },
+                }),
                 "maxRetries": p_int("突然中断重试上限，0-5，缺省 2"),
                 "x": json!({ "type": "number", "description": "画布 x 坐标（可选）" }),
                 "y": json!({ "type": "number", "description": "画布 y 坐标（可选）" }),
             },
-            "required": ["key", "name", "agentId"],
+            "required": ["key", "name"],
         }
     });
 

@@ -13,6 +13,62 @@ use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
 use std::collections::{HashMap, HashSet};
 
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum StageKind {
+    #[default]
+    Agent,
+    Condition,
+}
+
+impl StageKind {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            StageKind::Agent => "agent",
+            StageKind::Condition => "condition",
+        }
+    }
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct StageCondition {
+    pub left: String,
+    pub op: ConditionOp,
+    #[serde(default)]
+    pub right: Option<String>,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum ConditionOp {
+    Eq,
+    Neq,
+    Contains,
+    NotContains,
+    Exists,
+    NotExists,
+    And,
+    Or,
+    Raw,
+}
+
+impl ConditionOp {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            ConditionOp::Eq => "eq",
+            ConditionOp::Neq => "neq",
+            ConditionOp::Contains => "contains",
+            ConditionOp::NotContains => "not_contains",
+            ConditionOp::Exists => "exists",
+            ConditionOp::NotExists => "not_exists",
+            ConditionOp::And => "and",
+            ConditionOp::Or => "or",
+            ConditionOp::Raw => "raw",
+        }
+    }
+}
+
 /// 工作流发起变量：在模板中定义，发起实例时填写并持久化到任务。
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -34,6 +90,9 @@ pub struct WorkflowVariable {
 pub struct StageSpec {
     pub key: String,
     pub name: String,
+    #[serde(default)]
+    pub kind: StageKind,
+    #[serde(default)]
     pub agent_id: String,
     #[serde(default)]
     pub project_id: Option<String>,
@@ -43,6 +102,11 @@ pub struct StageSpec {
     pub depends_on: Vec<String>,
     #[serde(default)]
     pub when: Option<String>,
+    #[serde(default)]
+    pub condition: Option<StageCondition>,
+    /// 条件节点输出端口 → 目标节点 key；true/false 为保留端口。
+    #[serde(default)]
+    pub cases: HashMap<String, String>,
     /// 节点级突然中断重试上限；缺省沿用全局 2 次。
     #[serde(default)]
     pub max_retries: Option<i64>,
@@ -56,6 +120,10 @@ pub struct StageSpec {
 impl StageSpec {
     pub fn retry_limit(&self) -> i64 {
         self.max_retries.unwrap_or(2).clamp(0, 5)
+    }
+
+    pub fn is_condition(&self) -> bool {
+        self.kind == StageKind::Condition
     }
 }
 
@@ -124,8 +192,30 @@ pub fn validate(stages: &[StageSpec]) -> Result<(), String> {
         if !keys.insert(s.key.clone()) {
             return Err(format!("节点 key 重复：{}", s.key));
         }
-        if s.agent_id.trim().is_empty() {
+        if s.kind == StageKind::Agent && s.agent_id.trim().is_empty() {
             return Err(format!("节点「{}」未绑定智能体", s.name));
+        }
+        if s.kind == StageKind::Condition {
+            let condition = s
+                .condition
+                .as_ref()
+                .ok_or_else(|| format!("逻辑节点「{}」尚未配置判断条件", s.name))?;
+            if !valid_variable_key(condition.left.trim()) {
+                return Err(format!(
+                    "逻辑节点「{}」的左侧变量不合法：{}",
+                    s.name, condition.left
+                ));
+            }
+            if !matches!(condition.op, ConditionOp::Exists | ConditionOp::NotExists)
+                && condition
+                    .right
+                    .as_deref()
+                    .unwrap_or_default()
+                    .trim()
+                    .is_empty()
+            {
+                return Err(format!("逻辑节点「{}」缺少比较值", s.name));
+            }
         }
         if let Some(n) = s.max_retries {
             if !(0..=5).contains(&n) {
@@ -140,6 +230,20 @@ pub fn validate(stages: &[StageSpec]) -> Result<(), String> {
             }
             if !keys.contains(d) {
                 return Err(format!("节点「{}」依赖了不存在的节点：{}", s.key, d));
+            }
+        }
+        for (branch, target) in &s.cases {
+            if branch != "true" && branch != "false" {
+                return Err(format!("逻辑节点「{}」包含未知分支：{}", s.name, branch));
+            }
+            if !keys.contains(target) {
+                return Err(format!(
+                    "逻辑节点「{}」的 {} 分支指向不存在的节点：{}",
+                    s.name, branch, target
+                ));
+            }
+            if target == &s.key {
+                return Err(format!("逻辑节点「{}」的分支不能指向自身", s.name));
             }
         }
     }
@@ -299,6 +403,84 @@ pub fn render_template(template: &str, inputs: &serde_json::Map<String, Value>) 
     out
 }
 
+/// 逻辑节点仅保存单个判断；组合逻辑通过多个逻辑节点与 DAG 分支表达。
+pub fn eval_condition(condition: &StageCondition, inputs: &serde_json::Map<String, Value>) -> bool {
+    let actual = inputs.get(&condition.left);
+    match condition.op {
+        ConditionOp::Exists => actual.is_some(),
+        ConditionOp::NotExists => actual.is_none(),
+        ConditionOp::Eq => actual.map(value_text).as_deref() == condition.right.as_deref(),
+        ConditionOp::Neq => actual.map(value_text).as_deref() != condition.right.as_deref(),
+        ConditionOp::Contains => actual
+            .map(value_text)
+            .map(|value| {
+                condition
+                    .right
+                    .as_deref()
+                    .map(|expected| value.contains(expected))
+                    .unwrap_or(false)
+            })
+            .unwrap_or(false),
+        ConditionOp::NotContains => actual
+            .map(value_text)
+            .map(|value| {
+                condition
+                    .right
+                    .as_deref()
+                    .map(|expected| !value.contains(expected))
+                    .unwrap_or(true)
+            })
+            .unwrap_or(true),
+        ConditionOp::And | ConditionOp::Or | ConditionOp::Raw => false,
+    }
+}
+
+pub fn parse_condition(expr: &str) -> Result<StageCondition, String> {
+    let expr = expr.trim();
+    if let Some(inner) = expr.strip_prefix("NOT(").and_then(|v| v.strip_suffix(')')) {
+        let inner = parse_condition(inner)?;
+        return Ok(StageCondition {
+            left: inner.left,
+            op: match inner.op {
+                ConditionOp::Eq => ConditionOp::Neq,
+                ConditionOp::Neq => ConditionOp::Eq,
+                ConditionOp::Contains => ConditionOp::NotContains,
+                ConditionOp::NotContains => ConditionOp::Contains,
+                ConditionOp::Exists => ConditionOp::NotExists,
+                ConditionOp::NotExists => ConditionOp::Exists,
+                other => other,
+            },
+            right: inner.right,
+        });
+    }
+    if expr.starts_with('(') && expr.ends_with(')') {
+        return parse_condition(&expr[1..expr.len() - 1]);
+    }
+    for (token, op) in [
+        (" CONTAINS ", ConditionOp::Contains),
+        ("!=", ConditionOp::Neq),
+        ("==", ConditionOp::Eq),
+        ("=", ConditionOp::Eq),
+    ] {
+        if let Some((left, right)) = expr.split_once(token) {
+            return Ok(StageCondition {
+                left: left.trim().to_string(),
+                op,
+                right: Some(right.trim().to_string()),
+            });
+        }
+    }
+    let left = expr.trim();
+    if !valid_variable_key(left) {
+        return Err(format!("无法解析逻辑表达式：{expr}"));
+    }
+    Ok(StageCondition {
+        left: left.to_string(),
+        op: ConditionOp::Exists,
+        right: None,
+    })
+}
+
 pub fn parse_stages(wf: &Workflow) -> ApiResult<Vec<StageSpec>> {
     serde_json::from_str(&wf.stages)
         .map_err(|e| ApiError::bad_request(format!("工作流节点定义损坏：{e}")))
@@ -352,6 +534,14 @@ pub fn state_of(run: Option<&Run>) -> StageState {
     }
 }
 
+/// 普通依赖是否已满足；逻辑分支由 cases 单独判定。
+pub fn normal_deps_done(stage: &StageSpec, latest: &HashMap<String, Run>) -> bool {
+    stage
+        .depends_on
+        .iter()
+        .all(|d| state_of(latest.get(d)).ok())
+}
+
 /// 依赖已满足且自身尚未开始的节点（按模板顺序）。
 pub fn ready_candidates(stages: &[StageSpec], latest: &HashMap<String, Run>) -> Vec<StageSpec> {
     let mut out = vec![];
@@ -359,11 +549,58 @@ pub fn ready_candidates(stages: &[StageSpec], latest: &HashMap<String, Run>) -> 
         if latest.contains_key(&s.key) {
             continue;
         }
-        if s.depends_on.iter().all(|d| state_of(latest.get(d)).ok()) {
-            out.push(s.clone());
+        if s.is_condition() {
+            // 逻辑节点只依赖普通上游；命中分支的目标就绪前保持等待。
+            if s.depends_on.iter().all(|d| state_of(latest.get(d)).ok())
+                && !s.cases.values().any(|target| latest.contains_key(target))
+            {
+                out.push(s.clone());
+            }
+            continue;
         }
+        if !normal_deps_done(s, latest) {
+            continue;
+        }
+        // 来自逻辑分支的目标：只有对应 true/false 分支已求值才放行。
+        let gates: Vec<&StageSpec> = stages
+            .iter()
+            .filter(|source| {
+                source.is_condition() && source.cases.values().any(|target| target == &s.key)
+            })
+            .collect();
+        for source in gates {
+            let Some(result) = condition_result_of(source, latest) else {
+                continue;
+            };
+            if !condition_branch_allows(source, latest, result) {
+                continue;
+            }
+        }
+        out.push(s.clone());
     }
     out
+}
+
+fn condition_result_of(stage: &StageSpec, latest: &HashMap<String, Run>) -> Option<bool> {
+    latest
+        .get(&stage.key)
+        .filter(|run| run.status == "skipped")
+        .and_then(|_| stage.cases.get("true").map(|_| true))
+        .or_else(|| {
+            latest
+                .get(&stage.key)
+                .filter(|run| run.status == "skipped")
+                .and_then(|_| stage.cases.get("false").map(|_| false))
+        })
+}
+
+/// 条件端口是否放行：有命中分支时，只有该分支目标就绪；无命中分支时保持普通依赖语义。
+fn condition_branch_allows(stage: &StageSpec, latest: &HashMap<String, Run>, result: bool) -> bool {
+    let branch = if result { "true" } else { "false" };
+    match stage.cases.get(branch) {
+        Some(target) => latest.contains_key(target),
+        None => true,
+    }
 }
 
 /// 图的汇点（无下游节点）。
@@ -575,9 +812,50 @@ pub async fn spawn_ready(state: &SharedState, task_id: &str) -> ApiResult<()> {
     loop {
         let latest = latest_runs(state, &task.id).await?;
 
-        let Some(stage) = ready_candidates(&stages, &latest).into_iter().next() else {
-            break;
+        let stage = match ready_candidates(&stages, &latest).into_iter().next() {
+            Some(stage) => stage,
+            None => break,
         };
+        let condition_result = if stage.is_condition() {
+            let condition = stage.condition.as_ref().expect("逻辑节点已校验");
+            Some(eval_condition(condition, &inputs_of(&task)))
+        } else {
+            None
+        };
+        if let Some(result) = condition_result {
+            if !condition_branch_allows(&stage, &latest, result) {
+                continue;
+            }
+            let idx = stages.iter().position(|s| s.key == stage.key).unwrap_or(0) as i64;
+            let branch = if result { "true" } else { "false" };
+            sqlx::query(
+                "INSERT INTO runs (id, task_id, agent_id, node_id, stage, stage_key, status, ended_at) \
+                 SELECT ?,?,?,?,?,?, 'skipped', ? \
+                 WHERE NOT EXISTS (SELECT 1 FROM runs WHERE task_id = ? AND stage_key = ? AND status IN ('running','finished','skipped'))",
+            )
+            .bind(crate::new_id()).bind(&task.id).bind("").bind("local").bind(idx)
+            .bind(&stage.key).bind(branch).bind(crate::now())
+            .bind(&task.id).bind(&stage.key)
+            .execute(&state.db).await?;
+            events::append(
+                &state.db,
+                &state.broadcast,
+                &task.id,
+                "workflow.condition_evaluated",
+                "system",
+                None,
+                json!({
+                    "stageKey": stage.key,
+                    "stageName": stage.name,
+                    "result": result,
+                    "branch": branch,
+                    "next": stage.cases.get(branch),
+                    "condition": stage.condition,
+                }),
+            )
+            .await?;
+            continue;
+        }
         if !eval_when(state, &task, &stage, &latest).await {
             let idx = stages.iter().position(|s| s.key == stage.key).unwrap_or(0) as i64;
             sqlx::query(
@@ -636,6 +914,13 @@ async fn start_stage(
             .await
             .unwrap_or(0);
     if active >= agent.max_concurrent.max(1) {
+        return Ok(false);
+    }
+    if stage
+        .cases
+        .values()
+        .any(|target| latest.contains_key(target))
+    {
         return Ok(false);
     }
     let project_id = stage.project_id.clone().or_else(|| task.project_id.clone());
@@ -1106,11 +1391,14 @@ mod tests {
         StageSpec {
             key: key.into(),
             name: key.into(),
+            kind: StageKind::Agent,
             agent_id: "a".into(),
             project_id: None,
             prompt_append: None,
             depends_on: deps.iter().map(|d| d.to_string()).collect(),
             when: None,
+            condition: None,
+            cases: HashMap::new(),
             max_retries: None,
             x: None,
             y: None,
@@ -1154,11 +1442,45 @@ mod tests {
             render_template("实现{{goal}}（{{mode}}）", &inputs),
             "实现登录（safe）"
         );
+        let nested = resolve_inputs(
+            &variables,
+            Some(&json!({ "goal": "{{mode}}", "mode": "safe" })),
+        )
+        .unwrap();
+        assert_eq!(render_template("{{goal}}", &nested), "{{mode}}");
         assert!(resolve_inputs(&variables, Some(&json!({}))).is_err());
         assert!(resolve_inputs(&variables, Some(&json!({ "goal": "x", "unknown": "y" }))).is_err());
         assert!(
             resolve_inputs(&variables, Some(&json!({ "goal": "x", "mode": "invalid" }))).is_err()
         );
+    }
+
+    #[test]
+    fn condition_nodes_validate_and_evaluate() {
+        let mut gate = s("gate", &[]);
+        gate.kind = StageKind::Condition;
+        gate.agent_id.clear();
+        gate.condition = Some(StageCondition {
+            left: "mode".into(),
+            op: ConditionOp::Eq,
+            right: Some("safe".into()),
+        });
+        gate.cases = HashMap::from([
+            ("true".to_string(), "safe-path".to_string()),
+            ("false".to_string(), "fast-path".to_string()),
+        ]);
+        let safe = s("safe-path", &[]);
+        let fast = s("fast-path", &[]);
+        assert!(validate(&[gate.clone(), safe.clone(), fast.clone()]).is_ok());
+
+        let inputs = serde_json::from_value(json!({ "mode": "safe" })).unwrap();
+        assert!(eval_condition(gate.condition.as_ref().unwrap(), &inputs));
+        let inputs = serde_json::from_value(json!({ "mode": "fast" })).unwrap();
+        assert!(!eval_condition(gate.condition.as_ref().unwrap(), &inputs));
+
+        let mut invalid = gate.clone();
+        invalid.cases.insert("maybe".into(), "safe-path".into());
+        assert!(validate(&[invalid, safe, fast]).is_err());
     }
 
     #[test]

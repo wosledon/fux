@@ -251,6 +251,7 @@ export default function WorkflowCanvas({ stages, agents, projects, selected, onC
                 <Stack direction="row" spacing={0.5} sx={{ mt: 1, flexWrap: 'wrap', gap: 0.5 }}>
                   <Chip size="small" label={agentName} variant="outlined" sx={{ height: 20, fontSize: 10 }} />
                   <Chip size="small" label={projectName} variant="outlined" sx={{ height: 20, fontSize: 10 }} />
+                  {s.kind === 'condition' && <Chip size="small" label="逻辑判断" color="secondary" sx={{ height: 20, fontSize: 10 }} />}
                   {s.dependsOn.length === 0 && <Chip size="small" label="入口" color="primary" sx={{ height: 20, fontSize: 10 }} />}
                   {s.when && <Chip size="small" label={s.when} color="warning" variant="outlined" sx={{ height: 20, fontSize: 10 }} />}
                   {s.maxRetries !== undefined && s.maxRetries !== 2 && <Chip size="small" label={`重试 ${s.maxRetries}`} variant="outlined" sx={{ height: 20, fontSize: 10 }} />}

@@ -4,6 +4,7 @@ import { useTheme } from '@mui/material/styles'
 import AddIcon from '@mui/icons-material/Add'
 import AutoFixHighIcon from '@mui/icons-material/AutoFixHigh'
 import AutorenewIcon from '@mui/icons-material/Autorenew'
+import CallSplitIcon from '@mui/icons-material/CallSplit'
 import FitScreenIcon from '@mui/icons-material/FitScreen'
 import LinkIcon from '@mui/icons-material/Link'
 import ZoomInIcon from '@mui/icons-material/ZoomIn'
@@ -38,6 +39,7 @@ export default function WorkflowCanvasEditor({ stages, agents, projects, selecte
   const [connectFrom, setConnectFrom] = useState<string | null>(null)
   const [cursor, setCursor] = useState<{ x: number; y: number } | null>(null)
   const [hint, setHint] = useState('')
+  const [selectedPort, setSelectedPort] = useState<{ key: string; branch: 'true' | 'false' } | null>(null)
 
   const positions = useMemo(() => {
     const map = new Map<string, { x: number; y: number }>()
@@ -129,8 +131,8 @@ export default function WorkflowCanvasEditor({ stages, agents, projects, selecte
     const drag = dragRef.current
     if (!drag) return
     const w = toWorld(e.clientX, e.clientY)
-    const x = Math.max(0, Math.round((w.x - drag.dx) / 8) * 8)
-    const y = Math.max(0, Math.round((w.y - drag.dy) / 8) * 8)
+    const x = Math.round((w.x - drag.dx) / 8) * 8
+    const y = Math.round((w.y - drag.dy) / 8) * 8
     const cur = positions.get(drag.key)
     if (!cur || (cur.x === x && cur.y === y)) return
     drag.moved = true
@@ -146,6 +148,15 @@ export default function WorkflowCanvasEditor({ stages, agents, projects, selecte
   const onNodeClick = (s: WorkflowStage) => {
     if (suppressNodeClickRef.current) {
       suppressNodeClickRef.current = false
+      return
+    }
+    if (selectedPort) {
+      if (selectedPort.key === s.key) return
+      onChange(stages.map(x => x.key === selectedPort.key
+        ? { ...x, cases: { ...(x.cases || {}), [selectedPort.branch]: s.key } }
+        : x))
+      setSelectedPort(null)
+      setHint('')
       return
     }
     if (!connectMode) {
@@ -217,20 +228,46 @@ export default function WorkflowCanvasEditor({ stages, agents, projects, selecte
       agentId: agents[0]?.id || '',
       dependsOn: selected ? [selected] : [],
       maxRetries: 2,
-      x: Math.max(0, Math.round(cx / 8) * 8 - NODE_W / 2),
-      y: Math.max(0, Math.round(cy / 8) * 8 - NODE_H / 2),
+      x: Math.round(cx / 8) * 8 - NODE_W / 2,
+      y: Math.round(cy / 8) * 8 - NODE_H / 2,
     }])
     onSelect(key)
   }
 
-  const edges: { from: string; to: string }[] = []
-  for (const s of stages) for (const d of s.dependsOn) if (positions.has(d)) edges.push({ from: d, to: s.key })
+  const edges: { from: string; to: string; branch?: 'true' | 'false' }[] = []
+  for (const s of stages) {
+    for (const d of s.dependsOn) if (positions.has(d)) edges.push({ from: d, to: s.key })
+    if (s.kind === 'condition') {
+      for (const branch of ['true', 'false'] as const) {
+        const target = s.cases?.[branch]
+        if (target && positions.has(target)) edges.push({ from: s.key, to: target, branch })
+      }
+    }
+  }
 
   return (
     <Box sx={{ display: 'flex', flexDirection: 'column', height: '100%', minHeight: 460 }}>
       <Box sx={{ display: 'flex', alignItems: 'center', gap: 1, px: 2, py: 1, borderBottom: '1px solid', borderColor: 'divider', bgcolor: 'background.paper', flexWrap: 'wrap' }}>
-        <Button size="small" startIcon={<AddIcon />} onClick={addNode}>添加节点</Button>
-        <Button size="small" variant={connectMode ? 'contained' : 'outlined'} color={connectMode ? 'primary' : 'inherit'}
+        <Button size="small" startIcon={<AddIcon />} onClick={addNode}>添加智能体节点</Button>
+        <Button size="small" startIcon={<CallSplitIcon />} onClick={() => {
+          const key = nextKey(stages)
+          const rect = canvasRef.current?.getBoundingClientRect()
+          const cx = rect ? (rect.width / 2 - view.x) / view.zoom : 360
+          const cy = rect ? (rect.height / 2 - view.y) / view.zoom : 220
+          onChange([...stages, {
+            key,
+            name: `逻辑判断 ${stages.length + 1}`,
+            kind: 'condition',
+            agentId: '',
+            dependsOn: selected ? [selected] : [],
+            condition: { left: '', op: 'eq' },
+            cases: {},
+            x: Math.round(cx / 8) * 8 - NODE_W / 2,
+            y: Math.round(cy / 8) * 8 - NODE_H / 2,
+          }])
+          onSelect(key)
+        }}>添加逻辑节点</Button>
+        <Button size="small" variant={connectMode || !!selectedPort ? 'contained' : 'outlined'} color={connectMode || !!selectedPort ? 'primary' : 'inherit'}
           startIcon={<LinkIcon />}
           onClick={() => { setConnectMode(v => !v); setConnectFrom(null); setHint('') }}>
           {connectMode ? '退出连线' : '连线'}
@@ -242,7 +279,7 @@ export default function WorkflowCanvasEditor({ stages, agents, projects, selecte
         }}>自动布局</Button>
         <Box sx={{ flexGrow: 1 }} />
         <Typography variant="caption" color="text.secondary">
-          {hint || (connectMode ? '点击起点节点，再点击下游节点' : '拖动节点 · 拖动画布平移 · 滚轮缩放 · 依赖满足即并行执行')}
+          {hint || (selectedPort ? `点击目标节点，连接 ${selectedPort.branch.toUpperCase()} 分支` : connectMode ? '点击起点节点，再点击下游节点' : '无限画布 · 拖动节点 / 平移空白 / 滚轮缩放')}
         </Typography>
       </Box>
 
@@ -282,19 +319,38 @@ export default function WorkflowCanvasEditor({ stages, agents, projects, selecte
               const y2 = b.y + NODE_H / 2
               const mid = Math.max(40, Math.abs(x2 - x1) / 2)
               const d = `M ${x1} ${y1} C ${x1 + mid} ${y1}, ${x2 - mid} ${y2}, ${x2} ${y2}`
+              const color = e.branch === 'true' ? theme.palette.success.main
+                : e.branch === 'false' ? theme.palette.error.main
+                : edgeColor
               return (
                 <g key={i}>
-                  <path d={d} stroke={edgeColor} strokeWidth={1.8} fill="none" markerEnd="url(#wf-edit-arrow)"
+                  <path d={d} stroke={color} strokeWidth={1.8} fill="none" markerEnd="url(#wf-edit-arrow)"
                     vectorEffect="non-scaling-stroke" />
                   <path d={d} stroke="transparent" strokeWidth={16} fill="none"
                     vectorEffect="non-scaling-stroke"
                     style={{ pointerEvents: 'stroke', cursor: 'pointer' }}
                     onClick={ev => {
                       ev.stopPropagation()
-                      onChange(stages.map(x => x.key === e.to ? { ...x, dependsOn: x.dependsOn.filter(dep => dep !== e.from) } : x))
+                      onChange(stages.map(x => {
+                        if (x.key !== e.to) return x
+                        if (e.branch && x.kind === 'condition') {
+                          const cases = { ...(x.cases || {}) }
+                          delete cases[e.branch!]
+                          return { ...x, cases }
+                        }
+                        return { ...x, dependsOn: x.dependsOn.filter(dep => dep !== e.from) }
+                      }))
                     }}>
-                    <title>点击删除依赖 {e.from} → {e.to}</title>
+                    <title>点击删除{e.branch ? ` ${e.branch.toUpperCase()} 分支` : '依赖'} {e.from} → {e.to}</title>
                   </path>
+                  {e.branch && (
+                    <g transform={`translate(${(x1 + x2) / 2}, ${(y1 + y2) / 2})`}>
+                      <rect x={-14} y={-9} width={28} height={18} rx={9} fill={color} />
+                      <text x={0} y={3.5} textAnchor="middle" fontSize={9} fontWeight={700} fill="#fff">
+                        {e.branch.toUpperCase()}
+                      </text>
+                    </g>
+                  )}
                 </g>
               )
             })}
@@ -323,9 +379,9 @@ export default function WorkflowCanvasEditor({ stages, agents, projects, selecte
                   p: 1.5, borderRadius: 1.5, userSelect: 'none', touchAction: 'none',
                   cursor: connectMode ? 'crosshair' : 'grab',
                   border: '2px solid',
-                  borderColor: isSource ? 'warning.main' : isSelected ? 'primary.main' : 'divider',
+                  borderColor: isSource || selectedPort?.key === s.key ? 'warning.main' : isSelected ? 'primary.main' : s.kind === 'condition' ? 'secondary.main' : 'divider',
                   boxShadow: isSelected ? '0 6px 18px rgba(37,99,235,0.14)' : 'none',
-                  bgcolor: 'background.paper',
+                  bgcolor: s.kind === 'condition' ? 'background.default' : 'background.paper',
                   '&:active': { cursor: connectMode ? 'crosshair' : 'grabbing' },
                 }}>
                 <Box sx={{ display: 'flex', alignItems: 'center', gap: 0.5 }}>
@@ -334,12 +390,39 @@ export default function WorkflowCanvasEditor({ stages, agents, projects, selecte
                 </Box>
                 <Typography variant="caption" color="text.secondary" display="block" noWrap sx={{ fontFamily: 'monospace' }}>{s.key}</Typography>
                 <Stack direction="row" spacing={0.5} sx={{ mt: 1, flexWrap: 'wrap', gap: 0.5 }}>
-                  <Chip size="small" label={agentName} variant="outlined" sx={{ height: 20, fontSize: 10 }} />
-                  <Chip size="small" label={projectName} variant="outlined" sx={{ height: 20, fontSize: 10 }} />
+                  {s.kind === 'condition' ? (
+                    <>
+                      <Chip size="small" label="逻辑判断" color="secondary" sx={{ height: 20, fontSize: 10 }} />
+                      <Chip size="small" label={conditionSummary(s)} color="warning" variant="outlined" sx={{ height: 20, fontSize: 10 }} />
+                    </>
+                  ) : (
+                    <>
+                      <Chip size="small" label={agentName} variant="outlined" sx={{ height: 20, fontSize: 10 }} />
+                      <Chip size="small" label={projectName} variant="outlined" sx={{ height: 20, fontSize: 10 }} />
+                    </>
+                  )}
                   {s.dependsOn.length === 0 && <Chip size="small" label="入口" color="primary" sx={{ height: 20, fontSize: 10 }} />}
                   {s.when && <Chip size="small" label={s.when} color="warning" variant="outlined" sx={{ height: 20, fontSize: 10 }} />}
                   {s.maxRetries !== undefined && s.maxRetries !== 2 && <Chip size="small" label={`重试 ${s.maxRetries}`} variant="outlined" sx={{ height: 20, fontSize: 10 }} />}
                 </Stack>
+                {s.kind === 'condition' && (
+                  <Stack direction="row" spacing={0.5} sx={{ mt: 0.75 }}>
+                    {(['true', 'false'] as const).map(branch => (
+                      <Chip
+                        key={branch}
+                        size="small"
+                        color={branch === 'true' ? 'success' : 'error'}
+                        variant={selectedPort?.key === s.key && selectedPort.branch === branch ? 'filled' : 'outlined'}
+                        label={`${branch.toUpperCase()} → ${s.cases?.[branch] || '未连接'}`}
+                        onClick={e => {
+                          e.stopPropagation()
+                          setSelectedPort({ key: s.key, branch })
+                          setHint(`点击目标节点，连接 ${branch.toUpperCase()} 分支`)
+                        }}
+                      />
+                    ))}
+                  </Stack>
+                )}
               </Paper>
             )
           })}
@@ -370,6 +453,13 @@ export default function WorkflowCanvasEditor({ stages, agents, projects, selecte
       </Box>
     </Box>
   )
+}
+
+function conditionSummary(stage: WorkflowStage): string {
+  const c = stage.condition
+  if (!c?.left) return '未配置'
+  const op = ({ eq: '=', neq: '≠', contains: '包含', exists: '存在' } as Record<string, string>)[c.op] || c.op
+  return c.op === 'exists' ? `${c.left} 存在` : `${c.left} ${op} ${c.right || ''}`
 }
 
 function nextKey(stages: WorkflowStage[]): string {

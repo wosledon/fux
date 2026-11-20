@@ -2,8 +2,10 @@ import { memo, useCallback, useEffect, useMemo, useRef, useState, type ReactNode
 import { useNavigate, useOutletContext } from 'react-router-dom'
 import { useQuery, useQueryClient } from '@tanstack/react-query'
 import { DndContext, DragOverlay, PointerSensor, useSensor, useSensors, useDraggable, useDroppable, type DragEndEvent, type DragOverEvent, type DragStartEvent } from '@dnd-kit/core'
-import { Box, Typography, Chip, Paper, Button, IconButton, Dialog, DialogTitle, DialogContent, DialogActions, TextField, MenuItem, Tooltip, InputAdornment, Divider } from '@mui/material'
+import { alpha, Box, Stack, Typography, Chip, Paper, Button, IconButton, Dialog, DialogContent, TextField, MenuItem, Tooltip, InputAdornment, Divider } from '@mui/material'
+import { useTheme } from '@mui/material/styles'
 import AddIcon from '@mui/icons-material/Add'
+import AutoAwesomeIcon from '@mui/icons-material/AutoAwesome'
 import SearchIcon from '@mui/icons-material/Search'
 import ChevronLeftIcon from '@mui/icons-material/ChevronLeft'
 import ChevronRightIcon from '@mui/icons-material/ChevronRight'
@@ -267,12 +269,28 @@ function BoardScroller({ children, contentKey }: { children: ReactNode; contentK
         {children}
       </Box>
       {state.left && (
-        <IconButton aria-label="向左查看更多泳道" onClick={() => scroll(-1)} sx={scrollButtonSx('left')}>
+        <IconButton
+          aria-label="向左查看更多泳道"
+          onClick={() => {
+            // 精确回到起点，避免平滑滚动保留小数位置。
+            ref.current?.scrollTo({ left: 0, behavior: 'smooth' })
+          }}
+          sx={scrollButtonSx('left')}
+        >
           <ChevronLeftIcon fontSize="small" />
         </IconButton>
       )}
       {state.right && (
-        <IconButton aria-label="向右查看更多泳道" onClick={() => scroll(1)} sx={scrollButtonSx('right')}>
+        <IconButton
+          aria-label="向右查看更多泳道"
+          onClick={() => {
+            const el = ref.current
+            if (!el) return
+            // 精确落到最后一个像素，避免浏览器保留小数 scrollLeft 形成末尾留白。
+            el.scrollTo({ left: el.scrollWidth, behavior: 'smooth' })
+          }}
+          sx={scrollButtonSx('right')}
+        >
           <ChevronRightIcon fontSize="small" />
         </IconButton>
       )}
@@ -444,10 +462,13 @@ function CreateTaskDialog({ open, onClose, wsId, boardId, projects, agents, work
   const [assignee, setAssignee] = useState('')
   const [vars, setVars] = useState<Record<string, string>>({})
   const [err, setErr] = useState('')
+  const theme = useTheme()
   const type = types.find(t => t.id === typeId)
   const schema = parseJson<{ name: string; label?: string; required?: boolean; default?: string }[]>(type?.variablesSchema, [])
   const previewTitle = type ? renderTemplate(type.titleTemplate, vars) : title
   const previewContent = type ? renderTemplate(type.contentTemplate, vars) : content
+  const project = projects.find(p => p.id === projectId)
+  const assigneeAgent = assignee.startsWith('agent:') ? agents.find(a => a.id === assignee.slice(6)) : undefined
 
   const submit = async () => {
     setErr('')
@@ -470,52 +491,199 @@ function CreateTaskDialog({ open, onClose, wsId, boardId, projects, agents, work
   }
 
   return (
-    <Dialog open={open} onClose={onClose} fullWidth maxWidth="sm">
-      <DialogTitle>新建任务</DialogTitle>
-      <DialogContent sx={{ display: 'grid', gap: 2, pt: '12px !important' }}>
-        <TextField select label="任务类型（模板）" value={typeId} onChange={e => { setTypeId(e.target.value); setVars({}) }}>
-          <MenuItem value="">自由创建</MenuItem>
-          {types.map(t => <MenuItem key={t.id} value={t.id}><CategoryIcon fontSize="small" sx={{ mr: 1, color: 'text.secondary' }} />{t.name}</MenuItem>)}
-        </TextField>
-        {type ? (
-          <>
-            {schema.map(v => (
-              <TextField key={v.name} label={`${v.label || v.name}${v.required ? ' *' : ''}`} value={vars[v.name] ?? v.default ?? ''}
-                onChange={e => setVars(s => ({ ...s, [v.name]: e.target.value }))} multiline={v.name !== 'title'} minRows={v.name === 'title' ? 1 : 2} />
-            ))}
-            {schema.length === 0 && <TextField label="title" value={vars.title || ''} onChange={e => setVars(s => ({ ...s, title: e.target.value }))} />}
-            <Paper variant="outlined" sx={{ p: 1.5, bgcolor: 'background.default', borderColor: 'divider' }}>
-              <Typography variant="caption" color="text.secondary" display="block" sx={{ mb: 0.5 }}>实时预览</Typography>
-              <Typography fontWeight={700}>{previewTitle || '（标题）'}</Typography>
-              {previewContent && <Typography variant="body2" color="text.secondary" sx={{ whiteSpace: 'pre-wrap', mt: 0.5, maxHeight: 120, overflow: 'auto' }}>{previewContent}</Typography>}
-            </Paper>
-          </>
-        ) : (
-          <>
-            <TextField label="标题 *" value={title} onChange={e => setTitle(e.target.value)} />
-            <TextField label="内容（提示词）" value={content} onChange={e => setContent(e.target.value)} multiline minRows={4} />
-          </>
-        )}
-        <Divider />
-        <Box sx={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 2 }}>
-          <TextField select label="项目" value={projectId} onChange={e => setProjectId(e.target.value)}>
-            <MenuItem value="">不关联项目</MenuItem>
-            {projects.map(p => <MenuItem key={p.id} value={p.id}>{p.name}</MenuItem>)}
-          </TextField>
-          <TextField select label="优先级" value={priority} onChange={e => setPriority(Number(e.target.value))}>
-            {[0, 1, 2, 3].map(p => <MenuItem key={p} value={p}>{p === 0 ? '普通' : `P${p}`}</MenuItem>)}
-          </TextField>
+    <Dialog
+      open={open}
+      onClose={onClose}
+      fullWidth
+      maxWidth="md"
+      slotProps={{
+        paper: {
+          sx: {
+            borderRadius: 3,
+            overflow: 'hidden',
+            border: '1px solid',
+            borderColor: 'divider',
+            boxShadow: theme => `0 24px 70px ${theme.palette.mode === 'dark' ? 'rgba(0,0,0,.45)' : 'rgba(24,34,48,.18)'}`,
+          },
+        },
+      }}
+    >
+      <Box sx={{
+        px: { xs: 2.5, sm: 3 }, py: 2.25,
+        display: 'flex', alignItems: 'center', gap: 1.5,
+        borderBottom: '1px solid', borderColor: 'divider',
+        bgcolor: theme => alpha(theme.palette.primary.main, theme.palette.mode === 'dark' ? 0.1 : 0.045),
+      }}>
+        <Box sx={{
+          width: 38, height: 38, borderRadius: 2, display: 'grid', placeItems: 'center', flexShrink: 0,
+          color: 'primary.main', bgcolor: 'background.paper', boxShadow: '0 4px 12px rgba(37,99,235,.12)',
+        }}>
+          <AddIcon fontSize="small" />
         </Box>
-        <TextField select label="指派（留空自动匹配）" value={assignee} onChange={e => setAssignee(e.target.value)}>
-          <MenuItem value="">自动匹配</MenuItem>
-          {agents.map(a => <MenuItem key={a.id} value={`agent:${a.id}`}><SmartToyIcon fontSize="small" sx={{ mr: 1, color: 'text.secondary' }} />{a.name}</MenuItem>)}
-        </TextField>
-        {err && <Typography color="error">{err}</Typography>}
+        <Box sx={{ flexGrow: 1, minWidth: 0 }}>
+          <Typography variant="h6" fontWeight={750}>新建任务</Typography>
+          <Typography variant="caption" color="text.secondary">描述目标，选择执行上下文，随后进入待规划</Typography>
+        </Box>
+        <Chip size="small" color="primary" variant="outlined" label="待规划" />
+      </Box>
+
+      <DialogContent sx={{ p: 0 }}>
+        <Box sx={{ px: { xs: 2.5, sm: 3 }, pt: 2.5 }}>
+          <Typography variant="overline" color="text.secondary" sx={{ display: 'block', mb: 1 }}>从模板开始</Typography>
+          <Box sx={{ display: 'flex', gap: 1, overflowX: 'auto', pb: 1 }}>
+            <Paper
+              elevation={0}
+              onClick={() => { setTypeId(''); setVars({}) }}
+              sx={{
+                minWidth: 136, p: 1.25, borderRadius: 2, cursor: 'pointer',
+                border: '1px solid', borderColor: !typeId ? 'primary.main' : 'divider',
+                bgcolor: !typeId ? theme => alpha(theme.palette.primary.main, 0.08) : 'background.paper',
+                transition: 'border-color .15s, background-color .15s',
+              }}
+            >
+              <AddIcon fontSize="small" color={!typeId ? 'primary' : 'disabled'} />
+              <Typography variant="body2" fontWeight={650} sx={{ mt: 0.75 }}>自由创建</Typography>
+              <Typography variant="caption" color="text.secondary" display="block">从空白任务开始</Typography>
+            </Paper>
+            {types.map(t => (
+              <Paper
+                key={t.id}
+                elevation={0}
+                onClick={() => { setTypeId(t.id); setVars({}) }}
+                sx={{
+                  minWidth: 156, p: 1.25, borderRadius: 2, cursor: 'pointer',
+                  border: '1px solid', borderColor: typeId === t.id ? 'primary.main' : 'divider',
+                  bgcolor: typeId === t.id ? theme => alpha(theme.palette.primary.main, 0.08) : 'background.paper',
+                  transition: 'border-color .15s, background-color .15s',
+                }}
+              >
+                <CategoryIcon fontSize="small" color={typeId === t.id ? 'primary' : 'disabled'} />
+                <Typography variant="body2" fontWeight={650} noWrap sx={{ mt: 0.75 }}>{t.name}</Typography>
+                <Typography variant="caption" color="text.secondary" display="block">使用预设变量与结构</Typography>
+              </Paper>
+            ))}
+          </Box>
+        </Box>
+
+        <Box sx={{
+          px: { xs: 2.5, sm: 3 }, pt: 2, pb: 2.5,
+          display: 'grid', gap: 2.5,
+          gridTemplateColumns: { xs: '1fr', md: 'minmax(0, 1.35fr) minmax(260px, .65fr)' },
+        }}>
+          <Box sx={{ minWidth: 0 }}>
+            <Typography variant="overline" color="text.secondary" sx={{ display: 'block', mb: 1 }}>任务内容</Typography>
+            {type ? (
+              <Stack spacing={2}>
+                {schema.map(v => (
+                  <TextField
+                    key={v.name}
+                    fullWidth
+                    size="small"
+                    label={`${v.label || v.name}${v.required ? ' *' : ''}`}
+                    value={vars[v.name] ?? v.default ?? ''}
+                    onChange={e => setVars(s => ({ ...s, [v.name]: e.target.value }))}
+                    multiline={v.name !== 'title'}
+                    minRows={v.name === 'title' ? 1 : 2}
+                  />
+                ))}
+                {schema.length === 0 && <TextField fullWidth size="small" label="title" value={vars.title || ''} onChange={e => setVars(s => ({ ...s, title: e.target.value }))} />}
+              </Stack>
+            ) : (
+              <Stack spacing={2}>
+                <TextField
+                  fullWidth
+                  autoFocus
+                  label="任务标题"
+                  placeholder="一句话说明要完成什么"
+                  value={title}
+                  onChange={e => setTitle(e.target.value)}
+                />
+                <TextField
+                  fullWidth
+                  multiline
+                  minRows={6}
+                  label="目标 / 约束 / 验收"
+                  placeholder="补充背景、边界和完成标准…"
+                  value={content}
+                  onChange={e => setContent(e.target.value)}
+                />
+              </Stack>
+            )}
+          </Box>
+
+          <Box sx={{ minWidth: 0 }}>
+            <Typography variant="overline" color="text.secondary" sx={{ display: 'block', mb: 1 }}>执行上下文</Typography>
+            <Paper variant="outlined" sx={{ p: 1.5, borderRadius: 2, borderColor: 'divider' }}>
+              <Stack spacing={1.5}>
+                <TextField select size="small" fullWidth label="关联项目" value={projectId} onChange={e => setProjectId(e.target.value)}>
+                  <MenuItem value="">不关联项目</MenuItem>
+                  {projects.map(p => <MenuItem key={p.id} value={p.id}>{p.name}</MenuItem>)}
+                </TextField>
+                <TextField select size="small" fullWidth label="执行智能体" value={assignee} onChange={e => setAssignee(e.target.value)}>
+                  <MenuItem value="">自动匹配</MenuItem>
+                  {agents.map(a => <MenuItem key={a.id} value={`agent:${a.id}`}>{a.name}</MenuItem>)}
+                </TextField>
+                <Box>
+                  <Typography variant="caption" color="text.secondary" sx={{ display: 'block', mb: 0.75 }}>优先级</Typography>
+                  <Box sx={{ display: 'grid', gridTemplateColumns: 'repeat(4, 1fr)', gap: 0.75 }}>
+                    {[0, 1, 2, 3].map(p => (
+                      <Button
+                        key={p}
+                        size="small"
+                        variant={priority === p ? 'contained' : 'outlined'}
+                        color={priority === p ? 'primary' : 'inherit'}
+                        onClick={() => setPriority(p)}
+                        sx={{ minWidth: 0, px: 0.5 }}
+                      >
+                        {p === 0 ? '普通' : `P${p}`}
+                      </Button>
+                    ))}
+                  </Box>
+                </Box>
+              </Stack>
+            </Paper>
+
+            <Paper elevation={0} sx={{
+              mt: 1.5, p: 1.5, borderRadius: 2,
+              bgcolor: theme => alpha(theme.palette.primary.main, theme.palette.mode === 'dark' ? 0.09 : 0.045),
+              border: '1px solid', borderColor: theme => alpha(theme.palette.primary.main, 0.16),
+            }}>
+              <Stack direction="row" spacing={0.75} alignItems="center" sx={{ mb: 0.75 }}>
+                <AutoAwesomeIcon sx={{ fontSize: 15, color: 'primary.main' }} />
+                <Typography variant="caption" fontWeight={700} color="primary.main">任务预览</Typography>
+              </Stack>
+              <Typography variant="body2" fontWeight={650} noWrap>{previewTitle || '等待填写标题'}</Typography>
+              {previewContent && (
+                <Typography variant="caption" color="text.secondary" sx={{ display: 'block', mt: 0.5, whiteSpace: 'pre-wrap', maxHeight: 64, overflow: 'hidden' }}>
+                  {previewContent}
+                </Typography>
+              )}
+              <Box sx={{ display: 'flex', gap: 0.5, mt: 1, flexWrap: 'wrap' }}>
+                {project && <Chip size="small" variant="outlined" label={project.name} />}
+                {assigneeAgent && <Chip size="small" variant="outlined" label={assigneeAgent.name} />}
+                {priority > 0 && <Chip size="small" color="primary" label={`P${priority}`} />}
+                {!project && !assigneeAgent && priority === 0 && <Typography variant="caption" color="text.secondary">自动选择项目与智能体</Typography>}
+              </Box>
+            </Paper>
+          </Box>
+        </Box>
+
+        {err && (
+          <Box sx={{ mx: { xs: 2.5, sm: 3 }, mb: 2, p: 1.25, borderRadius: 1.5, bgcolor: theme => alpha(theme.palette.error.main, 0.08), color: 'error.main' }}>
+            <Typography variant="body2">{err}</Typography>
+          </Box>
+        )}
       </DialogContent>
-      <DialogActions sx={{ px: 3, pb: 2 }}>
+
+      <Box sx={{
+        px: { xs: 2.5, sm: 3 }, py: 1.75,
+        display: 'flex', alignItems: 'center', gap: 1.5,
+        borderTop: '1px solid', borderColor: 'divider', bgcolor: 'background.default',
+      }}>
+        <Typography variant="caption" color="text.secondary" sx={{ flexGrow: 1 }}>创建后可在任务详情继续补充评论与上下文</Typography>
         <Button onClick={onClose}>取消</Button>
         <Button variant="contained" onClick={submit} disabled={!typeId && !title.trim()}>创建任务</Button>
-      </DialogActions>
+      </Box>
     </Dialog>
   )
 }

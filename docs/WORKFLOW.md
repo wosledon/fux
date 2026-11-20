@@ -15,6 +15,11 @@
 | `stages`                    | TEXT NOT NULL DEFAULT `'[]'`                 | 节点数组（JSON，见 1.2） |
 | `created_at` / `updated_at` | TEXT                                         | `crate::now()` 格式      |
 
+节点有两类：
+
+- `agent`：绑定智能体与项目，实际创建 Run 执行。
+- `condition`：不绑定智能体、不创建 Run；读取任务发起变量并写求值事件，只放行命中分支。
+
 ### 1.2 节点 `StageSpec`
 
 ```jsonc
@@ -25,7 +30,10 @@
   "projectId": "uuid|null",     // null = 继承任务主项目
   "promptAppend": "只改 proto/**",
   "dependsOn": [],              // 空数组 = 入口节点
-  "when": "tag:backend",        // 可选，见 §4
+  "kind": "agent",              // agent | condition
+  "condition": null,            // condition 节点的判断式
+  "cases": {},                  // condition 节点：{ "true": key, "false": key }
+  "when": "tag:backend",        // agent 节点可选，见 §4
   "maxRetries": 2,              // 可选，突然中断重试上限 0-5
   "x": 48, "y": 48               // 可选，画布坐标（仅展示/编辑用）
 }
@@ -38,6 +46,7 @@
 3. 无环（DFS 白/灰/黑标记），否则 400。
 4. `agentId` 必须属于同一工作区；`maxRetries` 若提供必须在 0-5 之间。
 5. 发起变量 key 唯一、仅含字母/数字/下划线且不能以数字开头；选项型变量的默认值必须属于选项。
+6. `condition` 节点必须配置 `condition`；其 `cases` 仅允许 `true` / `false` 端口，目标必须存在且不能指向自身。`agent` 节点必须绑定智能体。
 
 ### 1.3 `runs`（节点执行实例）
 
@@ -96,6 +105,7 @@ for 节点 in 模板顺序:
 ```
 
 - **并行度由 DAG 结构决定**：同一时刻可运行的节点全部派发，没有并行配置项。
+- **条件节点**：`kind=condition` 不启动 Run，依据本次任务 `workflow_inputs` 求值后写 `workflow.condition_evaluated`，并只放行 `cases.true` 或 `cases.false` 指向的目标。未连接的分支保持普通 DAG 依赖语义。
 - 触发时机：任务认领后、任一 run 结束后、`skip` / `rewind` 后、以及每 2s 的 `workflow_tick` 兜底（只处理 `in_progress` 且 `workflow_id IS NOT NULL` 的任务）。
 - 唯一的并发限制来自执行侧：每个智能体的 `agents.max_concurrent`（按 `runs.status='running'` 计数）。
 
@@ -217,7 +227,7 @@ for 节点 in 模板顺序:
 
 ## 8. 前端
 
-- **工作流页** `/ws/:wsId/workflows`：最近实例、模板复制、模板列表、画布式创建/编辑（拖拽节点、连线建立依赖、自动布局；节点属性面板编辑 key/名称/智能体/项目/`when`/重试上限/追加提示词；侧栏维护发起变量）、动态「一句话发起」（标题 + 内容 + 变量 + 目标项目 + 标签 + 优先级）。
+- **工作流页** `/ws/:wsId/workflows`：最近实例、模板复制、模板列表、无限画布创建/编辑（节点坐标可正负、平移/缩放/适应画布；支持智能体节点与逻辑判断节点、TRUE/FALSE 分支连线、普通依赖、自动布局；节点属性编辑 key/名称/智能体/项目/`when`/重试上限/追加提示词，或条件与分支；侧栏维护发起变量）、动态「一句话发起」（标题 + 内容 + 变量 + 目标项目 + 标签 + 优先级）。
 - **看板**：任务卡显示工作流名 chip（`workflowName` 由前端用模板列表映射）。
 - **任务详情**：有 `workflowId` 时多一个「流程」页签：
   - 按层展示节点（依赖 → 下游），每节点 chip：`pending / running / succeeded / failed / skipped`；

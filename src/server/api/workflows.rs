@@ -46,6 +46,9 @@ struct WorkflowReq {
 
 async fn check_refs(state: &SharedState, ws_id: &str, stages: &[StageSpec]) -> ApiResult<()> {
     for s in stages {
+        if s.is_condition() {
+            continue;
+        }
         let n: i64 =
             sqlx::query_scalar("SELECT COUNT(*) FROM agents WHERE id = ? AND workspace_id = ?")
                 .bind(&s.agent_id)

@@ -86,7 +86,9 @@ export default function WorkflowEditorPage() {
   for (const s of stages) {
     if (!/^[a-z0-9-]{1,40}$/.test(s.key)) issues.push(`节点「${s.name || s.key}」的 key 不合法（小写字母/数字/连字符）`)
     else if ((keyCount.get(s.key) || 0) > 1) issues.push(`key 重复：${s.key}`)
-    if (!s.agentId) issues.push(`节点「${s.name || s.key}」未绑定智能体`)
+    if (s.kind !== 'condition' && !s.agentId) issues.push(`节点「${s.name || s.key}」未绑定智能体`)
+    if (s.kind === 'condition' && !s.condition?.left.trim()) issues.push(`逻辑节点「${s.name || s.key}」未配置左侧变量`)
+    if (s.kind === 'condition' && s.condition?.op !== 'exists' && !s.condition?.right?.trim()) issues.push(`逻辑节点「${s.name || s.key}」未配置比较值`)
     if (s.maxRetries !== undefined && (!Number.isInteger(s.maxRetries) || s.maxRetries < 0 || s.maxRetries > 5)) {
       issues.push(`节点「${s.name || s.key}」重试次数必须在 0-5 之间`)
     }
@@ -241,7 +243,7 @@ export default function WorkflowEditorPage() {
               <Button size="small" startIcon={<AddIcon />} onClick={() => {
                 const key = nextNodeKey(stages)
                 setStages(prev => [...prev, {
-                  key, name: `节点 ${prev.length + 1}`, agentId: agents[0]?.id || '',
+                  key, name: `节点 ${prev.length + 1}`, kind: 'agent', agentId: agents[0]?.id || '',
                   dependsOn: [], maxRetries: 2, x: 48, y: 48,
                 }])
                 setSelected(key)
@@ -251,27 +253,62 @@ export default function WorkflowEditorPage() {
 
           {sel && (
             <Stack spacing={2}>
-              <Typography variant="subtitle2" fontWeight={700}>节点属性</Typography>
+              <Box sx={{ display: 'flex', alignItems: 'center', gap: 1 }}>
+                <Typography variant="subtitle2" fontWeight={700} sx={{ flexGrow: 1 }}>{sel.kind === 'condition' ? '逻辑节点属性' : '智能体节点属性'}</Typography>
+                <Chip size="small" color={sel.kind === 'condition' ? 'secondary' : 'primary'} label={sel.kind === 'condition' ? '逻辑判断' : '智能体执行'} />
+              </Box>
               <TextField size="small" label="key" value={sel.key} onChange={e => renameKey(sel.key, e.target.value)}
                 helperText="小写字母 / 数字 / 连字符" error={!/^[a-z0-9-]{1,40}$/.test(sel.key)} />
               <TextField size="small" label="名称" value={sel.name} onChange={e => update(sel.key, { name: e.target.value })} />
-              <TextField size="small" select label="智能体" value={sel.agentId} onChange={e => update(sel.key, { agentId: e.target.value })}>
-                {agents.map(a => <MenuItem key={a.id} value={a.id}>{a.name}</MenuItem>)}
-              </TextField>
-              <TextField size="small" select label="执行项目" value={sel.projectId || ''}
-                onChange={e => update(sel.key, { projectId: e.target.value || undefined })}>
-                <MenuItem value="">继承任务主项目</MenuItem>
-                {projects.map(p => <MenuItem key={p.id} value={p.id}>{p.name}</MenuItem>)}
-              </TextField>
-              <TextField size="small" label="跳过条件（tag:x / path:x / var:k=v）" value={sel.when || ''}
-                onChange={e => update(sel.key, { when: e.target.value || undefined })} />
-              <TextField size="small" type="number" label="中断重试上限（0-5）" value={sel.maxRetries ?? 2}
-                slotProps={{ htmlInput: { min: 0, max: 5, step: 1 } }}
-                onChange={e => update(sel.key, { maxRetries: e.target.value === '' ? undefined : Number(e.target.value) })} />
-              <TextField size="small" label="追加提示词（支持 {{变量名}}）" value={sel.promptAppend || ''} multiline minRows={3}
-                onChange={e => update(sel.key, { promptAppend: e.target.value || undefined })} />
+              {sel.kind === 'condition' ? (
+                <>
+                  <TextField size="small" label="左侧变量 key" value={sel.condition?.left || ''}
+                    onChange={e => update(sel.key, { condition: { ...(sel.condition || { left: '', op: 'exists' }), left: e.target.value } })} />
+                  <TextField size="small" select label="判断运算符" value={sel.condition?.op || 'exists'}
+                    onChange={e => update(sel.key, { condition: { ...(sel.condition || { left: '', op: 'exists' }), op: e.target.value as any } })}>
+                    <MenuItem value="eq">等于（=）</MenuItem>
+                    <MenuItem value="neq">不等于（≠）</MenuItem>
+                    <MenuItem value="contains">包含</MenuItem>
+                    <MenuItem value="exists">变量存在</MenuItem>
+                  </TextField>
+                  {sel.condition?.op !== 'exists' && (
+                    <TextField size="small" label="比较值" value={sel.condition?.right || ''}
+                      onChange={e => update(sel.key, { condition: { ...(sel.condition || { left: '', op: 'eq' }), right: e.target.value } })} />
+                  )}
+                  <Divider />
+                  <Typography variant="caption" color="text.secondary">分支出口</Typography>
+                  {(['true', 'false'] as const).map(branch => (
+                    <TextField key={branch} size="small" select label={`${branch.toUpperCase()} 分支 →`} value={sel.cases?.[branch] || ''}
+                      onChange={e => update(sel.key, { cases: { ...(sel.cases || {}), [branch]: e.target.value || undefined } as any })}>
+                      <MenuItem value="">未连接</MenuItem>
+                      {stages.filter(x => x.key !== sel.key).map(x => <MenuItem key={x.key} value={x.key}>{x.name || x.key}</MenuItem>)}
+                    </TextField>
+                  ))}
+                  <Typography variant="caption" color="text.secondary">
+                    组合逻辑可用多个判断节点串联；例如先判断标签，再判断变量。
+                  </Typography>
+                </>
+              ) : (
+                <>
+                  <TextField size="small" select label="智能体" value={sel.agentId} onChange={e => update(sel.key, { agentId: e.target.value })}>
+                    {agents.map(a => <MenuItem key={a.id} value={a.id}>{a.name}</MenuItem>)}
+                  </TextField>
+                  <TextField size="small" select label="执行项目" value={sel.projectId || ''}
+                    onChange={e => update(sel.key, { projectId: e.target.value || undefined })}>
+                    <MenuItem value="">继承任务主项目</MenuItem>
+                    {projects.map(p => <MenuItem key={p.id} value={p.id}>{p.name}</MenuItem>)}
+                  </TextField>
+                  <TextField size="small" label="跳过条件（tag:x / path:x / var:k=v）" value={sel.when || ''}
+                    onChange={e => update(sel.key, { when: e.target.value || undefined })} />
+                  <TextField size="small" type="number" label="中断重试上限（0-5）" value={sel.maxRetries ?? 2}
+                    slotProps={{ htmlInput: { min: 0, max: 5, step: 1 } }}
+                    onChange={e => update(sel.key, { maxRetries: e.target.value === '' ? undefined : Number(e.target.value) })} />
+                  <TextField size="small" label="追加提示词（支持 {{变量名}}）" value={sel.promptAppend || ''} multiline minRows={3}
+                    onChange={e => update(sel.key, { promptAppend: e.target.value || undefined })} />
+                </>
+              )}
               <Divider />
-              <Typography variant="caption" color="text.secondary">上游依赖</Typography>
+              <Typography variant="caption" color="text.secondary">普通上游依赖</Typography>
               <Box sx={{ display: 'flex', gap: 0.5, flexWrap: 'wrap' }}>
                 {sel.dependsOn.length === 0 && <Typography variant="caption" color="text.secondary">入口节点（无依赖）</Typography>}
                 {sel.dependsOn.map(d => (
