@@ -224,6 +224,8 @@ struct RemoteSink {
     tx: mpsc::UnboundedSender<RuntimeMsg>,
     run_id: String,
     perms: Perms,
+    /// 当前 ACP 会话 id：session_started 时写入，心跳/结束时上报
+    session: tokio::sync::Mutex<String>,
 }
 
 #[async_trait::async_trait]
@@ -258,7 +260,19 @@ impl RunSink for RemoteSink {
             status: "running".into(),
             stop_reason: String::new(),
             turn_count,
-            session_id: String::new(),
+            session_id: self.session.lock().await.clone(),
+        });
+    }
+
+    /// 会话建立即上报，控制面据此把 acp_session_id 写进 runs（重试时可续接）。
+    async fn session_started(&self, session_id: &str) {
+        *self.session.lock().await = session_id.to_string();
+        let _ = self.tx.send(RuntimeMsg::RunState {
+            run_id: self.run_id.clone(),
+            status: "running".into(),
+            stop_reason: String::new(),
+            turn_count: 0,
+            session_id: session_id.to_string(),
         });
     }
     async fn pending_guidance(&self) -> Vec<String> {
@@ -283,6 +297,7 @@ async fn execute_run(
                 status: "failed".into(),
                 stop_reason: "interrupted".into(),
                 turn_count: 0,
+                session_id: String::new(),
                 pushed: false,
                 head: None,
                 error: Some(format!("准备工作区失败: {e:#}")),
@@ -298,6 +313,7 @@ async fn execute_run(
         tx: tx.clone(),
         run_id: run_id.clone(),
         perms,
+        session: tokio::sync::Mutex::new(String::new()),
     });
     let outcome: RunOutcome = fux::runner::execute(spec.clone(), sink, cancel_rx).await;
     cancels.lock().await.remove(&run_id);
@@ -348,6 +364,7 @@ async fn execute_run(
         status,
         stop_reason,
         turn_count: outcome.turn_count,
+        session_id: outcome.session_id.clone(),
         pushed,
         head,
         error,

@@ -13,11 +13,42 @@ use std::sync::Arc;
 use std::time::{Duration, Instant};
 use tokio::sync::{Mutex, broadcast, mpsc};
 
+/// 助理常驻连接上限：每个连接都是一个真实 CLI 进程，需防止会话无限增多拖垮机器。
+const MAX_CONNS: usize = 8;
+/// 单轮 prompt 的兜底超时：CLI 僵死（不退出也不响应）时释放连接与排队中的后续消息。
+const PROMPT_TIMEOUT_SECS: u64 = 600;
+/// 连接空闲回收阈值（reaper 每 60s 扫描一次）。
+const IDLE_EVICT_SECS: u64 = 600;
+/// 「生成中」标记的过期阈值：任务异常退出时最多残留这么久，防止状态永久卡住。
+const GENERATING_STALE_SECS: u64 = 600;
+
+/// SSE 断开守卫：流被丢弃（客户端断线/关页）时通知生成任务取消，避免后台空跑烧额度。
+struct DisconnectGuard(Option<tokio::sync::oneshot::Sender<()>>);
+
+impl Drop for DisconnectGuard {
+    fn drop(&mut self) {
+        if let Some(tx) = self.0.take() {
+            let _ = tx.send(());
+        }
+    }
+}
+
+/// 上下文指纹：用于判断复用会话时工作区上下文是否有变化（无需引入哈希依赖）。
+fn context_hash(context: &str) -> String {
+    let mut h: u64 = 1469598103934665603;
+    for b in context.as_bytes() {
+        h ^= *b as u64;
+        h = h.wrapping_mul(1099511628211);
+    }
+    format!("{h:x}")
+}
+
 impl Default for AssistantPool {
     fn default() -> Self {
         Self {
             conns: Mutex::new(HashMap::new()),
             generating: std::sync::Mutex::new(HashMap::new()),
+            max_conns: MAX_CONNS,
         }
     }
 }
@@ -27,11 +58,15 @@ pub struct AssistantPool {
     conns: Mutex<HashMap<String, Arc<AssistantConn>>>,
     /// 正在生成的会话（用于页面刷新/离开后回来继续等待结果）
     generating: std::sync::Mutex<HashMap<String, Instant>>,
+    /// 最大常驻连接数（每个连接 ≈ 一个 CLI 进程），超出按最近使用淘汰
+    max_conns: usize,
 }
 
 struct AssistantConn {
     /// 智能体 / CLI / 模型 / 授权配置指纹；变化时重建连接
     fingerprint: String,
+    /// 创建时注入的工作区上下文指纹；变化时复用消息附带最新上下文
+    context_hash: String,
     client: Arc<AcpClient>,
     acp_session_id: String,
     /// 把 session/update 广播给当前请求（同一时刻只允许一个 prompt）
@@ -121,7 +156,7 @@ impl AssistantPool {
     fn is_generating(&self, key: &str) -> bool {
         let map = self.generating.lock().unwrap_or_else(|e| e.into_inner());
         map.get(key)
-            .map(|t| t.elapsed() < Duration::from_secs(600))
+            .map(|t| t.elapsed() < Duration::from_secs(GENERATING_STALE_SECS))
             .unwrap_or(false)
     }
 
@@ -133,9 +168,22 @@ impl AssistantPool {
     }
 
     async fn put(&self, key: String, conn: Arc<AssistantConn>) {
-        let old = self.conns.lock().await.insert(key, conn);
-        if let Some(old) = old {
-            old.client.kill().await;
+        let mut map = self.conns.lock().await;
+        map.insert(key.clone(), conn);
+        // 超出容量上限：按最近使用淘汰最久未用的连接（刚插入的 key 除外）
+        while map.len() > self.max_conns {
+            let lru = map
+                .iter()
+                .filter(|(k, _)| **k != key)
+                .min_by_key(|(_, c)| *c.last_used.lock().unwrap_or_else(|e| e.into_inner()))
+                .map(|(k, _)| k.clone());
+            let Some(lru) = lru else { break };
+            if let Some(old) = map.remove(&lru) {
+                tracing::debug!("助理连接池已满，淘汰最久未用连接 {lru}");
+                // kill 是异步的，但持有锁时也不能阻塞：丢给后台任务
+                let client = old.client.clone();
+                tokio::spawn(async move { client.kill().await });
+            }
         }
     }
 
@@ -166,14 +214,14 @@ impl AssistantPool {
     }
 }
 
-/// 后台回收空闲助理连接（10 分钟）。
+/// 后台回收空闲助理连接。
 pub fn spawn_reaper(state: SharedState) {
     tokio::spawn(async move {
         loop {
             tokio::time::sleep(Duration::from_secs(60)).await;
             state
                 .assistant_pool
-                .evict_idle(Duration::from_secs(600))
+                .evict_idle(Duration::from_secs(IDLE_EVICT_SECS))
                 .await;
         }
     });
@@ -212,7 +260,9 @@ async fn create_conn(
     mcp: Vec<Value>,
     model: &str,
     effort: &str,
+    policy: &str,
     fingerprint: String,
+    context_hash: String,
 ) -> anyhow::Result<Arc<AssistantConn>> {
     let mut client = AcpClient::spawn(&cli.command, args, env, cwd).await?;
     let mut updates = client.take_updates();
@@ -240,6 +290,10 @@ async fn create_conn(
     });
 
     let req_client = Arc::downgrade(&client);
+    // 通知走会话广播通道：不能长期持有 SSE 发送端，否则响应流永远等不到关闭
+    let notice_tx = updates_tx.clone();
+    let notice_session = acp_session_id.clone();
+    let policy = policy.to_string();
     tokio::spawn(async move {
         while let Some(req) = requests.recv().await {
             // 弱引用：连接被回收时请求泵自然结束，不阻止 AcpClient Drop 杀掉子进程
@@ -247,20 +301,28 @@ async fn create_conn(
                 break;
             };
             if req.method == "session/request_permission" {
-                let opt = req
-                    .params
-                    .get("options")
-                    .and_then(|o| o.as_array())
-                    .and_then(|arr| arr.first())
-                    .and_then(|o| o.get("optionId"))
-                    .and_then(|v| v.as_str())
-                    .unwrap_or("");
-                let _ = req_client
-                    .respond(
-                        req.id,
-                        json!({ "outcome": { "outcome": "selected", "optionId": opt } }),
-                    )
-                    .await;
+                // 与 run 路径同一套策略：full_auto 全放行，只读自动放行，
+                // 写操作按智能体审批策略处理（助理无审批通道 → 拒绝并提示）
+                let decision = crate::runner::decide_permission(&policy, &req.params);
+                if decision == "reject" {
+                    let title = req
+                        .params
+                        .pointer("/toolCall/title")
+                        .and_then(|t| t.as_str())
+                        .unwrap_or("该操作");
+                    let _ = notice_tx.send(json!({
+                        "sessionId": notice_session,
+                        "update": {
+                            "sessionUpdate": "notice",
+                            "text": format!("已阻止「{title}」：当前智能体审批策略不自动放行写操作，如需执行请先在智能体设置调整")
+                        }
+                    }));
+                }
+                let result = match crate::runner::pick_option(&req.params, &decision) {
+                    Some(id) => json!({ "outcome": { "outcome": "selected", "optionId": id } }),
+                    None => json!({ "outcome": { "outcome": "cancelled" } }),
+                };
+                let _ = req_client.respond(req.id, result).await;
             } else {
                 let _ = req_client.respond(req.id, json!({})).await;
             }
@@ -276,6 +338,7 @@ async fn create_conn(
 
     Ok(Arc::new(AssistantConn {
         fingerprint,
+        context_hash,
         client,
         acp_session_id,
         updates: updates_tx,
@@ -443,6 +506,8 @@ async fn delete_session(
         .bind(&sid)
         .execute(&state.db)
         .await?;
+    // 同时回收该会话的常驻连接，避免 CLI 进程空转到空闲超时
+    state.assistant_pool.remove(&format!("{ws_id}:{sid}")).await;
     Ok(HttpResponse::Ok().json(json!({ "ok": true })))
 }
 
@@ -697,14 +762,14 @@ async fn chat(
             crate::runner::map_effort(&agent.reasoning_effort)
         ));
     }
-    let mut env: Vec<(String, String)> =
-        serde_json::from_str::<serde_json::Map<String, Value>>(&cli.env_template)
-            .map(|m| {
-                m.into_iter()
-                    .map(|(k, v)| (k, v.as_str().unwrap_or("").to_string()))
-                    .collect()
-            })
-            .unwrap_or_default();
+    let mut env: Vec<(String, String)> = crate::server::secrets::cli_env_plain(&cli.env_template)
+        .as_object()
+        .map(|m| {
+            m.into_iter()
+                .map(|(k, v)| (k.clone(), v.as_str().unwrap_or("").to_string()))
+                .collect()
+        })
+        .unwrap_or_default();
     crate::acp::tweak_env(&cli.kind, &mut env);
     let full_prompt = if agent.system_prompt.is_empty() {
         prompt
@@ -725,6 +790,10 @@ async fn chat(
     let fingerprint = conn_fingerprint(&agent, &cli, &model, &effort, &skills, &mcp);
     let pool_key = format!("{ws_id}:{session_id}");
     let short_prompt = message.clone();
+    let policy = agent.policy.clone();
+    let ctx_hash = context_hash(&context);
+    // 客户端断线信号：SSE 流被丢弃时经 DisconnectGuard 送达
+    let (cancel_tx, cancel_rx) = tokio::sync::oneshot::channel::<()>();
     state.assistant_pool.mark_generating(&pool_key, true);
     tokio::spawn(async move {
         let answer = Arc::new(Mutex::new(String::new()));
@@ -817,6 +886,12 @@ async fn chat(
                     ));
                     }
                     "plan" => sse_status(tx, "已更新执行计划"),
+                    // 权限被策略阻止时的提示（由连接权限泵经广播通道送入）
+                    "notice" => {
+                        if let Some(text) = u.pointer("/update/text").and_then(|t| t.as_str()) {
+                            sse_status(tx, text);
+                        }
+                    }
                     _ => {}
                 }
             };
@@ -825,7 +900,8 @@ async fn chat(
                 Some(c) => (c, false),
                 None => {
                     let c = create_conn(
-                        &tx, &cli, &args, &env, &cwd, mcp, &model, &effort, fingerprint.clone(),
+                        &tx, &cli, &args, &env, &cwd, mcp, &model, &effort, &policy,
+                        fingerprint.clone(), ctx_hash.clone(),
                     )
                     .await?;
                     state2.assistant_pool.put(pool_key.clone(), c.clone()).await;
@@ -837,32 +913,61 @@ async fn chat(
             if !is_new {
                 sse_status(&tx, "复用已有会话，正在等待模型响应…");
             }
-            let prompt_text: &str = if is_new { &full_prompt } else { &short_prompt };
-            let resp = {
-                let fut = conn.client.prompt(&conn.acp_session_id, prompt_text);
-                tokio::pin!(fut);
-                let mut waited = 0u64;
-                let mut tick = tokio::time::interval_at(
-                    tokio::time::Instant::now() + std::time::Duration::from_secs(10),
-                    std::time::Duration::from_secs(10),
-                );
-                loop {
-                    tokio::select! {
-                        r = &mut fut => break r,
-                        recv = sub.recv() => match recv {
-                            Ok(u) => {
-                                if u.get("sessionId").and_then(|v| v.as_str()) == Some(conn.acp_session_id.as_str()) {
-                                    handle_update(&u, &tx, &answer, &process);
+            // 复用时若工作区上下文有更新，把最新上下文随消息补入（新会话已含在 full_prompt 里）
+            let prompt_text: String = if is_new {
+                full_prompt.clone()
+            } else if conn.context_hash != ctx_hash {
+                format!("{context}\n\n{short_prompt}")
+            } else {
+                short_prompt.clone()
+            };
+            let mut cancel_rx = cancel_rx;
+            let resp = tokio::time::timeout(
+                std::time::Duration::from_secs(PROMPT_TIMEOUT_SECS),
+                async {
+                    let fut = conn.client.prompt(&conn.acp_session_id, &prompt_text);
+                    tokio::pin!(fut);
+                    let mut waited = 0u64;
+                    let mut tick = tokio::time::interval_at(
+                        tokio::time::Instant::now() + std::time::Duration::from_secs(10),
+                        std::time::Duration::from_secs(10),
+                    );
+                    loop {
+                        tokio::select! {
+                            r = &mut fut => break r,
+                            recv = sub.recv() => match recv {
+                                Ok(u) => {
+                                    if u.get("sessionId").and_then(|v| v.as_str()) == Some(conn.acp_session_id.as_str()) {
+                                        handle_update(&u, &tx, &answer, &process);
+                                    }
                                 }
+                                Err(broadcast::error::RecvError::Lagged(_)) => {}
+                                Err(broadcast::error::RecvError::Closed) => {}
+                            },
+                            _ = tick.tick() => {
+                                waited += 10;
+                                sse_status(&tx, &format!("等待 {cli_name} 响应（已 {waited}s）…"));
                             }
-                            Err(broadcast::error::RecvError::Lagged(_)) => {}
-                            Err(broadcast::error::RecvError::Closed) => {}
-                        },
-                        _ = tick.tick() => {
-                            waited += 10;
-                            sse_status(&tx, &format!("等待 {cli_name} 响应（已 {waited}s）…"));
+                            // 客户端断开：取消会话并作废连接（ACP 会话被中途取消，状态不可信）
+                            _ = &mut cancel_rx => {
+                                sse_status(&tx, "连接已断开，正在取消本次生成…");
+                                let _ = conn.client.cancel(&conn.acp_session_id).await;
+                                state2.assistant_pool.remove(&pool_key).await;
+                                break Err(anyhow::anyhow!("客户端断开连接，已取消生成"));
+                            }
                         }
                     }
+                },
+            )
+            .await;
+            let resp = match resp {
+                Ok(r) => r,
+                Err(_) => {
+                    // CLI 僵死（不退出也不响应）：取消并作废连接，避免 prompt_lock 被永久持有
+                    sse_status(&tx, &format!("等待超过 {PROMPT_TIMEOUT_SECS}s，已强制取消本次生成"));
+                    let _ = conn.client.cancel(&conn.acp_session_id).await;
+                    state2.assistant_pool.remove(&pool_key).await;
+                    Err(anyhow::anyhow!("生成超时（{PROMPT_TIMEOUT_SECS}s），已取消"))
                 }
             };
             while let Ok(u) = sub.try_recv() {
@@ -917,8 +1022,13 @@ async fn chat(
     });
 
     let stream = async_stream::stream! {
+        // 流随响应返回：客户端断线/关闭页面时本生成器被丢弃，guard 触发取消
+        let _disconnect = DisconnectGuard(Some(cancel_tx));
         while let Some(line) = rx.recv().await {
+            // 终态事件后主动结束：不依赖发送端全部 drop（连接上还有长期存活的任务）
+            let terminal = line.contains("\"type\":\"done\"") || line.contains("\"type\":\"error\"");
             yield Ok::<_, actix_web::Error>(actix_web::web::Bytes::from(line));
+            if terminal { break; }
         }
     };
     Ok(HttpResponse::Ok()

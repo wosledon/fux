@@ -54,6 +54,9 @@ pub struct RunSpec {
     pub policy: String,
     pub guidance: Vec<String>,
     pub context_summary: String,
+    /// 续接的上一个 ACP 会话 id（重试时透传）；None 表示全新会话
+    #[serde(default)]
+    pub resume_session_id: Option<String>,
     /// 远程节点据此自行检出仓库/准备 worktree
     pub project: Option<ProjectSpec>,
     pub branch: String,
@@ -89,6 +92,8 @@ pub trait RunSink: Send + Sync {
     async fn heartbeat(&self, turn_count: u32);
     /// turn 结束后待注入的引导评论（决策 #7）
     async fn pending_guidance(&self) -> Vec<String>;
+    /// ACP 会话建立成功（新建或恢复）：本地落库 / 远程上报，便于追踪与断线重续
+    async fn session_started(&self, _session_id: &str) {}
 }
 
 /// 推理强度映射（Copilot 启动参数接受 low/medium/high/xhigh/max）。
@@ -108,7 +113,24 @@ impl Drop for HeartbeatGuard {
     }
 }
 
-fn pick_option(params: &Value, decision: &str) -> Option<String> {
+/// 权限决策的统一策略：run 与 AI 助理两条路径共用，避免助理会话静默放行写操作。
+/// 返回 allow_once / allow_always / reject；write_ask/read_auto 下的写操作需要人工审批，
+/// 助理场景没有审批通道，因此一律拒绝（由调用方提示用户改策略）。
+pub fn decide_permission(policy: &str, request: &Value) -> String {
+    if policy == "full_auto" {
+        return "allow_always".into();
+    }
+    let kind = request
+        .pointer("/toolCall/kind")
+        .and_then(|k| k.as_str())
+        .unwrap_or("");
+    if matches!(kind, "read" | "fetch" | "search" | "think") {
+        return "allow_once".into();
+    }
+    "reject".into()
+}
+
+pub(crate) fn pick_option(params: &Value, decision: &str) -> Option<String> {
     let want = match decision {
         "allow_once" => "allow_once",
         "allow_always" => "allow_always",
@@ -281,15 +303,38 @@ async fn execute_inner(
     let mut client = AcpClient::spawn(&spec.command, &args, &env, &spec.workdir).await?;
     let mut updates_rx = client.take_updates();
     let mut requests_rx = client.take_requests();
-    client.initialize().await?;
-    let session = client
-        .new_session_full(&spec.workdir, spec.mcp_servers.clone())
-        .await?;
+    let init = client.initialize().await?;
+    // 会话恢复：CLI 声明支持 loadSession 且带上了上个 run 的会话 id 时优先续接，
+    // 失败（会话已被 CLI 回收/跨机不可见）则回退新建，不阻塞任务推进。
+    let session = match spec
+        .resume_session_id
+        .as_deref()
+        .filter(|_| crate::acp::supports_load_session(&init))
+    {
+        Some(sid) => match client
+            .load_session(sid, &spec.workdir, spec.mcp_servers.clone())
+            .await
+        {
+            Ok(s) => s,
+            Err(e) => {
+                tracing::warn!("恢复 ACP 会话 {sid} 失败，回退新建会话: {e:#}");
+                client
+                    .new_session_full(&spec.workdir, spec.mcp_servers.clone())
+                    .await?
+            }
+        },
+        None => {
+            client
+                .new_session_full(&spec.workdir, spec.mcp_servers.clone())
+                .await?
+        }
+    };
     let session_id = session
         .get("sessionId")
         .and_then(|s| s.as_str())
         .map(|s| s.to_string())
         .ok_or_else(|| anyhow!("session/new 未返回 sessionId"))?;
+    sink.session_started(&session_id).await;
 
     // 模型 / 推理强度：按会话声明的配置项透传（兼容旧版固定 id）
     crate::acp::apply_model_effort(
@@ -459,4 +504,34 @@ async fn execute_inner(
     client.kill().await;
     pump.abort();
     Ok(outcome)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn decide_permission_matches_agent_policy() {
+        let read = json!({ "toolCall": { "kind": "read", "title": "读文件" } });
+        let write = json!({ "toolCall": { "kind": "edit", "title": "改文件" } });
+        // full_auto：读写都放行
+        assert_eq!(decide_permission("full_auto", &read), "allow_always");
+        assert_eq!(decide_permission("full_auto", &write), "allow_always");
+        // 其余策略：只读自动放行，写操作拒绝（助理场景没有审批通道）
+        for policy in ["read_auto", "write_ask"] {
+            assert_eq!(decide_permission(policy, &read), "allow_once");
+            assert_eq!(decide_permission(policy, &write), "reject");
+        }
+    }
+
+    #[test]
+    fn pick_option_prefers_exact_kind() {
+        let params = json!({ "options": [
+            { "optionId": "o1", "kind": "reject_once", "name": "拒绝" },
+            { "optionId": "o2", "kind": "allow_once", "name": "允许一次" },
+        ]});
+        assert_eq!(pick_option(&params, "allow_once").as_deref(), Some("o2"));
+        assert_eq!(pick_option(&params, "reject").as_deref(), Some("o1"));
+        assert_eq!(pick_option(&params, "allow_always"), None);
+    }
 }

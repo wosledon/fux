@@ -145,7 +145,7 @@ async fn handle_msg(state: &SharedState, node_id: &str, msg: RuntimeMsg) {
             session_id,
             ..
         } => {
-            let _ = sqlx::query("UPDATE runs SET turn_count = ?, acp_session_id = ?, last_event_at = ?, lease_expires_at = ? WHERE id = ?")
+            let _ = sqlx::query("UPDATE runs SET turn_count = ?, acp_session_id = COALESCE(NULLIF(?, ''), acp_session_id), last_event_at = ?, lease_expires_at = ? WHERE id = ?")
                 .bind(turn_count as i64).bind(&session_id).bind(crate::now()).bind(gitflow::lease_deadline()).bind(&run_id).execute(&state.db).await;
             let _ = sqlx::query("UPDATE tasks SET lease_expires_at = ? WHERE lease_run_id = ?")
                 .bind(gitflow::lease_deadline())
@@ -182,6 +182,7 @@ async fn handle_msg(state: &SharedState, node_id: &str, msg: RuntimeMsg) {
             status,
             stop_reason,
             turn_count,
+            session_id,
             pushed,
             head,
             error,
@@ -190,7 +191,7 @@ async fn handle_msg(state: &SharedState, node_id: &str, msg: RuntimeMsg) {
                 status,
                 stop_reason,
                 turn_count,
-                session_id: String::new(),
+                session_id,
                 error,
             };
             gitflow::finish_run(state, &run_id, outcome, Some((pushed, head))).await;

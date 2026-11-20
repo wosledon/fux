@@ -7,6 +7,7 @@ use crate::server::error::ApiResult;
 use crate::server::events;
 use crate::server::gitflow;
 use crate::server::models::{Agent, CliEntry, Node, Project, Run, Task};
+use crate::server::secrets;
 use crate::server::workflow;
 use async_trait::async_trait;
 use serde_json::{Value, json};
@@ -314,6 +315,23 @@ async fn dispatch_inner(
         .bind(run_id)
         .fetch_one(&state.db)
         .await?;
+    // 重试的 run 续接上一个 run 的 ACP 会话与工作摘要：
+    // CLI 不支持 loadSession 时会自动回退新建会话，摘要则拼进 prompt。
+    let (resume_session_id, context_summary) = match &run.retry_of {
+        Some(prev) => {
+            let sid: Option<String> =
+                sqlx::query_scalar("SELECT acp_session_id FROM runs WHERE id = ?")
+                    .bind(prev)
+                    .fetch_optional(&state.db)
+                    .await
+                    .ok()
+                    .flatten()
+                    .filter(|s: &String| !s.is_empty());
+            let summary = gitflow::run_summary(state, prev).await;
+            (sid, summary)
+        }
+        None => (None, String::new()),
+    };
     let task = domain::load_task(state, &run.task_id).await?;
     let agent = agents::load_agent(state, &run.agent_id).await?;
     let cli = sqlx::query_as::<_, CliEntry>("SELECT * FROM cli_entries WHERE id = ?")
@@ -347,14 +365,14 @@ async fn dispatch_inner(
         .await?;
     }
 
-    let env: Vec<(String, String)> =
-        serde_json::from_str::<serde_json::Map<String, Value>>(&cli.env_template)
-            .map(|m| {
-                m.into_iter()
-                    .map(|(k, v)| (k, v.as_str().unwrap_or("").to_string()))
-                    .collect()
-            })
-            .unwrap_or_default();
+    let env: Vec<(String, String)> = secrets::cli_env_plain(&cli.env_template)
+        .as_object()
+        .map(|m| {
+            m.into_iter()
+                .map(|(k, v)| (k.clone(), v.as_str().unwrap_or("").to_string()))
+                .collect()
+        })
+        .unwrap_or_default();
     let stage_spec = match &run.stage_key {
         Some(sk) => workflow::stages_of(state, &task)
             .await?
@@ -420,7 +438,8 @@ async fn dispatch_inner(
         mcp_servers,
         policy: agent.policy.clone(),
         guidance,
-        context_summary: String::new(),
+        context_summary,
+        resume_session_id,
         project: project.map(|p| ProjectSpec {
             project_id: p.id,
             kind: p.kind,
@@ -634,6 +653,15 @@ impl RunSink for LocalSink {
         )
         .await;
         "reject".into()
+    }
+
+    async fn session_started(&self, session_id: &str) {
+        // 会话一建立就落库：run 进行中/崩溃后都能看到真实 ACP 会话 id（供重试续接）
+        let _ = sqlx::query("UPDATE runs SET acp_session_id = ? WHERE id = ?")
+            .bind(session_id)
+            .bind(&self.run_id)
+            .execute(&self.state.db)
+            .await;
     }
 
     async fn heartbeat(&self, turn_count: u32) {

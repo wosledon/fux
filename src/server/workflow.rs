@@ -585,9 +585,8 @@ pub async fn finish_stage(
             .await?;
         }
         _ => {
-            // 突然中断：同节点自动重试 ≤ 2 次
+            // 突然中断：同节点自动重试 ≤ 2 次（续接会话 + 摘要由 dispatch_inner 统一处理）
             if outcome.stop_reason == "interrupted" && run.retry_count < 2 {
-                let summary = gitflow::run_summary(state, &run.id).await;
                 events::append(&state.db, &state.broadcast, &task.id, "watchdog.interrupted", "system", Some(&run.id),
                     json!({ "error": outcome.error, "retry": run.retry_count + 1, "stageKey": stage.key })).await?;
                 let new_run = crate::new_id();
@@ -601,7 +600,6 @@ pub async fn finish_stage(
                 events::append(&state.db, &state.broadcast, &task.id, "run.started", "system", Some(&new_run),
                     json!({ "agentId": run.agent_id, "nodeId": run.node_id, "stageKey": stage.key, "retry": run.retry_count + 1 })).await?;
                 scheduler::dispatch(state, &new_run, vec![]).await;
-                let _ = summary;
             } else {
                 events::append(&state.db, &state.broadcast, &task.id, "workflow.stage_failed", &actor, Some(&run.id),
                     json!({ "stageKey": stage.key, "error": outcome.error, "stopReason": outcome.stop_reason })).await?;

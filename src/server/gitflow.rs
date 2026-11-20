@@ -305,9 +305,8 @@ async fn finish_inner(
             .await?;
         }
         _ => {
-            // 突然中断：自动重试 ≤ 2 次（新会话 + 摘要上下文）
+            // 突然中断：自动重试 ≤ 2 次（续接 ACP 会话 + 摘要上下文，见 scheduler::dispatch_inner）
             if outcome.stop_reason == "interrupted" && run.retry_count < 2 {
-                let _summary = run_summary(state, run_id).await;
                 events::append(
                     &state.db,
                     &state.broadcast,

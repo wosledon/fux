@@ -77,7 +77,7 @@ export interface Delivery {
 }
 export interface Skill { id: string; workspaceId: string; name: string; description: string; source: string; version: string; content: string }
 export interface McpServer { id: string; workspaceId: string; name: string; transport: 'stdio' | 'sse' | 'http'; command?: string; args: string; url?: string; envJson: string; status: string }
-export interface Run { id: string; taskId: string; agentId: string; nodeId: string; stage: number; stageKey?: string; projectId?: string; branch?: string; headSha?: string; retryCount: number; status: string; stopReason?: string; turnCount: number; usageTokens: number; startedAt: string; endedAt?: string }
+export interface Run { id: string; taskId: string; agentId: string; nodeId: string; stage: number; stageKey?: string; projectId?: string; branch?: string; headSha?: string; retryCount: number; status: string; stopReason?: string; turnCount: number; usageTokens: number; startedAt: string; endedAt?: string; acpSessionId?: string }
 export interface NodeInfo { id: string; name: string; mode: string; approved: number; connStatus: string; capabilities: string; lastHeartbeat?: string; createdAt: string }
 export interface TaskEvent { id: number; taskId: string; seq: number; kind: string; actor: string; runId?: string; payload: string; createdAt: string }
 export interface Envelope { workspaceId: string; taskId: string; seq: number; kind: string; actor: string; runId?: string; payload: any; createdAt: string }

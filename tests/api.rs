@@ -833,6 +833,24 @@ async fn e2e_interrupt_retry_then_block() {
         .await
         .unwrap();
     assert_eq!(runs, 3, "1 次原始 + 2 次自动重试");
+    // 每个 run 都应记录真实 ACP 会话 id（session_started 建立即落库），
+    // 且重试 run 续接的是同一个会话（session/load）
+    let sids: Vec<Option<String>> =
+        sqlx::query_scalar("SELECT acp_session_id FROM runs WHERE task_id = ? ORDER BY started_at")
+            .bind(&tid)
+            .fetch_all(&ctx.state.db)
+            .await
+            .unwrap();
+    assert_eq!(sids.len(), 3, "应取到 3 个 run 的会话 id");
+    let first = sids[0].clone().expect("run 应记录 ACP 会话 id");
+    assert!(!first.is_empty(), "会话 id 不应为空");
+    for s in &sids[1..] {
+        assert_eq!(
+            s.as_deref(),
+            Some(first.as_str()),
+            "重试 run 应续接同一 ACP 会话"
+        );
+    }
     let t = fux::server::domain::load_task(&ctx.state, &tid)
         .await
         .unwrap();
@@ -1139,4 +1157,242 @@ async fn cli_models_probe_reads_acp_config_options() {
     assert_eq!(models[0]["id"], "mock-fast");
     assert_eq!(v["catalog"]["currentModelId"], "mock-fast");
     assert_eq!(v["catalog"]["efforts"].as_array().unwrap().len(), 3);
+}
+
+/// 会话恢复：CLI 声明 loadSession 时，带 resume_session_id 的 run 必须走 session/load
+/// （返回请求的会话 id），而不是 session/new（mock 会返回 cwd）。
+#[actix_web::test]
+async fn runner_resumes_acp_session_when_supported() {
+    use async_trait::async_trait;
+    use fux::runner::{RunSink, RunSpec, execute};
+    use std::sync::Mutex;
+
+    struct TestSink {
+        started: Mutex<Vec<String>>,
+    }
+
+    #[async_trait]
+    impl RunSink for TestSink {
+        async fn emit(&self, _kind: &str, _payload: Value) {}
+        async fn permission(&self, _request: Value) -> String {
+            "reject".into()
+        }
+        async fn heartbeat(&self, _turn_count: u32) {}
+        async fn pending_guidance(&self) -> Vec<String> {
+            vec![]
+        }
+        async fn session_started(&self, session_id: &str) {
+            self.started.lock().unwrap().push(session_id.to_string());
+        }
+    }
+
+    fn spec(workdir: &std::path::Path, command: &str, resume: Option<&str>) -> RunSpec {
+        RunSpec {
+            run_id: "run-resume".into(),
+            task_id: "task-resume".into(),
+            title: "恢复测试".into(),
+            content: "请完成工作".into(),
+            workdir: workdir.to_path_buf(),
+            command: command.to_string(),
+            args: vec![],
+            env: vec![],
+            cli_kind: "mock".into(),
+            model: String::new(),
+            effort: String::new(),
+            system_prompt: String::new(),
+            skills: vec![],
+            mcp_servers: vec![],
+            policy: "full_auto".into(),
+            guidance: vec![],
+            context_summary: String::new(),
+            resume_session_id: resume.map(str::to_string),
+            project: None,
+            branch: "fux/test".into(),
+            base_branch: None,
+            stage_key: String::new(),
+            stage_name: String::new(),
+            upstream: vec![],
+        }
+    }
+
+    let mock_bin = env!("CARGO_BIN_EXE_fux-mock-agent");
+    let dir = tempfile::tempdir().unwrap();
+    let workdir = dir.path().to_path_buf();
+
+    // 1) 带上上个 run 的会话 id → 走 session/load，会话 id 原样续接
+    let sink = std::sync::Arc::new(TestSink {
+        started: Mutex::new(vec![]),
+    });
+    let (_tx, rx) = tokio::sync::mpsc::unbounded_channel();
+    let outcome = execute(
+        spec(&workdir, mock_bin, Some("prev-session-123")),
+        sink.clone(),
+        rx,
+    )
+    .await;
+    assert_eq!(
+        outcome.status, "finished",
+        "恢复会话后应正常完成: {:?}",
+        outcome.error
+    );
+    assert_eq!(
+        outcome.session_id, "prev-session-123",
+        "应通过 session/load 续接原会话"
+    );
+    assert_eq!(
+        sink.started.lock().unwrap().as_slice(),
+        ["prev-session-123"],
+        "session_started 应上报真实会话 id"
+    );
+
+    // 2) 不带会话 id → 走 session/new（mock 以 cwd 作为会话 id）
+    let sink2 = std::sync::Arc::new(TestSink {
+        started: Mutex::new(vec![]),
+    });
+    let (_tx2, rx2) = tokio::sync::mpsc::unbounded_channel();
+    let outcome2 = execute(spec(&workdir, mock_bin, None), sink2, rx2).await;
+    assert_eq!(outcome2.status, "finished");
+    let expect_new = std::path::absolute(&workdir)
+        .unwrap()
+        .to_string_lossy()
+        .to_string();
+    assert_eq!(outcome2.session_id, expect_new, "无 resume 时应新建会话");
+}
+
+/// 存量 CLI env 明文应在启动回填时改存密文（兼容读取不破）。
+#[actix_web::test]
+async fn legacy_cli_env_is_encrypted_on_startup() {
+    let dir = tempfile::tempdir().unwrap();
+    {
+        let pool = db::init(dir.path()).await.unwrap();
+        sqlx::query("UPDATE cli_entries SET env_template = ? WHERE id = 'cli-mock'")
+            .bind("{\"MOCK_TOKEN\":\"plain-123\"}")
+            .execute(&pool)
+            .await
+            .unwrap();
+    }
+    // 重新初始化同一数据目录：存量明文应被加密
+    let pool = db::init(dir.path()).await.unwrap();
+    let stored: String =
+        sqlx::query_scalar("SELECT env_template FROM cli_entries WHERE id = 'cli-mock'")
+            .fetch_one(&pool)
+            .await
+            .unwrap();
+    assert_ne!(stored, "{\"MOCK_TOKEN\":\"plain-123\"}", "明文应被回填加密");
+    assert!(!stored.contains("plain-123"), "密文不应含明文片段");
+    assert_eq!(
+        fux::server::secrets::cli_env_plain(&stored),
+        json!({ "MOCK_TOKEN": "plain-123" }),
+        "解密后应还原原值"
+    );
+}
+
+/// CLI env 模板：写入即加密，接口不回传明文。
+#[actix_web::test]
+async fn cli_entry_env_is_encrypted_at_rest() {
+    let ctx = setup().await;
+    let app = app!(ctx);
+    let owner = register(&app, "owner-env").await;
+    let (ws, _board) = create_ws(&app, &owner).await;
+
+    let (_, cli) = call(
+        &app,
+        auth(
+            test::TestRequest::post()
+                .uri("/api/v1/cli-entries")
+                .set_json(json!({
+                    "workspaceId": ws, "name": "带密钥", "command": "echo",
+                    "envTemplate": { "API_KEY": "sk-secret" }
+                })),
+            &owner,
+        ),
+    )
+    .await;
+    assert_eq!(
+        cli["envTemplate"], "<encrypted>",
+        "创建响应不应回传密钥明文"
+    );
+    let cli_id = cli["id"].as_str().unwrap().to_string();
+
+    let stored: String = sqlx::query_scalar("SELECT env_template FROM cli_entries WHERE id = ?")
+        .bind(&cli_id)
+        .fetch_one(&ctx.state.db)
+        .await
+        .unwrap();
+    assert!(!stored.contains("sk-secret"), "入库必须是密文");
+    assert_eq!(
+        fux::server::secrets::cli_env_plain(&stored),
+        json!({ "API_KEY": "sk-secret" })
+    );
+
+    // 列表同样不回传明文
+    let (_, list) = call(
+        &app,
+        auth(
+            test::TestRequest::get().uri(&format!("/api/v1/cli-entries?workspaceId={ws}")),
+            &owner,
+        ),
+    )
+    .await;
+    let row = list
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|r| r["id"] == cli_id)
+        .expect("列表应包含新建条目");
+    assert_eq!(row["envTemplate"], "<encrypted>");
+}
+
+/// 助理会话权限：非 full_auto 策略下，写操作权限请求必须被拒绝并提示，而不是静默放行。
+#[actix_web::test]
+async fn assistant_respects_permission_policy() {
+    let ctx = setup().await;
+    let app = app!(ctx);
+    let owner = register(&app, "assistant-perm").await;
+    let (ws, _board) = create_ws(&app, &owner).await;
+
+    let mock_bin = env!("CARGO_BIN_EXE_fux-mock-agent");
+    let (_, cli) = call(
+        &app,
+        auth(
+            test::TestRequest::post()
+                .uri("/api/v1/cli-entries")
+                .set_json(json!({ "workspaceId": ws, "name": "MockAsk", "command": mock_bin, "args": [] })),
+            &owner,
+        ),
+    )
+    .await;
+    // 只读自动放行策略（写操作需人工审批）
+    let (s, _) = call(
+        &app,
+        auth(
+            test::TestRequest::post()
+                .uri(&format!("/api/v1/workspaces/{ws}/agents"))
+                .set_json(
+                    json!({ "name": "谨慎助理", "cliEntryId": cli["id"], "policy": "read_auto" }),
+                ),
+            &owner,
+        ),
+    )
+    .await;
+    assert_eq!(s, 200);
+
+    // ASK 触发 mock 的 session/request_permission（kind=edit）
+    let (s, body) = call_text(
+        &app,
+        auth(
+            test::TestRequest::post()
+                .uri("/api/v1/assistant/chat")
+                .set_json(json!({ "workspaceId": ws, "message": "ASK 帮我改文件" })),
+            &owner,
+        ),
+    )
+    .await;
+    assert_eq!(s, 200, "chat: {body}");
+    assert!(
+        body.contains("已阻止「写入文件 demo.txt」"),
+        "写操作权限应按策略拒绝并提示: {body}"
+    );
+    assert!(body.contains("权限已处理"), "mock 应收到拒绝决策: {body}");
+    assert!(body.contains("\"type\":\"done\""), "流应正常收尾: {body}");
 }

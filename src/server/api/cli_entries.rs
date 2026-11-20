@@ -3,6 +3,7 @@ use crate::server::SharedState;
 use crate::server::auth::{AuthUser, require};
 use crate::server::error::{ApiError, ApiResult};
 use crate::server::models::CliEntry;
+use crate::server::secrets;
 use actix_web::{HttpResponse, web};
 use serde::Deserialize;
 use serde_json::json;
@@ -31,6 +32,16 @@ async fn list(
             .await?
         }
     };
+    // env 模板为密文，不回传密钥明文
+    let rows: Vec<CliEntry> = rows
+        .into_iter()
+        .map(|mut e| {
+            if !e.env_template.is_empty() {
+                e.env_template = "<encrypted>".into();
+            }
+            e
+        })
+        .collect();
     Ok(HttpResponse::Ok().json(rows))
 }
 
@@ -51,15 +62,21 @@ async fn create(
 ) -> ApiResult<HttpResponse> {
     require(&state.db, &body.workspace_id, &user.id, "admin").await?;
     let id = crate::new_id();
+    // env 模板可能含 API key：加密后入库（与 MCP env 同一套密钥体系）
+    let env_enc = secrets::cli_env_encrypt(&body.env_template.clone().unwrap_or(json!({})))?;
     sqlx::query("INSERT INTO cli_entries (id, workspace_id, name, kind, command, args, env_template, is_default) VALUES (?,?,?,?,?,?,?,0)")
         .bind(&id).bind(&body.workspace_id).bind(&body.name).bind("custom").bind(&body.command)
         .bind(serde_json::to_string(&body.args.clone().unwrap_or_default()).unwrap())
-        .bind(body.env_template.clone().unwrap_or(json!({})).to_string())
+        .bind(&env_enc)
         .execute(&state.db).await?;
-    let e = sqlx::query_as::<_, CliEntry>("SELECT * FROM cli_entries WHERE id = ?")
+    let mut e = sqlx::query_as::<_, CliEntry>("SELECT * FROM cli_entries WHERE id = ?")
         .bind(&id)
         .fetch_one(&state.db)
         .await?;
+    // 不回传密钥明文
+    if !e.env_template.is_empty() {
+        e.env_template = "<encrypted>".into();
+    }
     Ok(HttpResponse::Ok().json(e))
 }
 
@@ -154,14 +171,14 @@ async fn models(
         require(&state.db, ws, &user.id, "member").await?;
     }
     let args: Vec<String> = serde_json::from_str(&e.args).unwrap_or_default();
-    let mut env: Vec<(String, String)> =
-        serde_json::from_str::<serde_json::Map<String, serde_json::Value>>(&e.env_template)
-            .map(|m| {
-                m.into_iter()
-                    .map(|(k, v)| (k, v.as_str().unwrap_or("").to_string()))
-                    .collect()
-            })
-            .unwrap_or_default();
+    let mut env: Vec<(String, String)> = secrets::cli_env_plain(&e.env_template)
+        .as_object()
+        .map(|m| {
+            m.into_iter()
+                .map(|(k, v)| (k.clone(), v.as_str().unwrap_or("").to_string()))
+                .collect()
+        })
+        .unwrap_or_default();
     crate::acp::tweak_env(&e.kind, &mut env);
     let cwd = std::env::temp_dir().join(format!("fux-models-{}", crate::new_id()));
     tokio::fs::create_dir_all(&cwd).await.ok();

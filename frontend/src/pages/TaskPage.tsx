@@ -575,6 +575,13 @@ export default function TaskPage() {
                   <Typography variant="caption" color="text.secondary" display="block" sx={{ mt: 0.75 }}>
                     {r.nodeId === 'local' ? '本地节点' : '远程节点'} · {r.turnCount} 轮{r.stageKey ? ` · 节点 ${r.stageKey}` : ''}{r.retryCount > 0 ? ` · 重试 #${r.retryCount}` : ''}{r.stopReason ? ` · ${r.stopReason}` : ''}
                   </Typography>
+                  {r.acpSessionId && (
+                    <Tooltip title="ACP 会话 ID（CLI 子进程内的会话；重试时尝试续接）">
+                      <Typography variant="caption" color="text.secondary" display="block" sx={{ mt: 0.25, fontFamily: 'monospace', fontSize: 11 }}>
+                        会话 {r.acpSessionId.length > 20 ? `${r.acpSessionId.slice(0, 8)}…${r.acpSessionId.slice(-6)}` : r.acpSessionId}
+                      </Typography>
+                    </Tooltip>
+                  )}
                 </Box>
               ))}
               {(data?.runs || []).length === 0 && <Typography variant="body2" color="text.secondary">还没有运行记录</Typography>}

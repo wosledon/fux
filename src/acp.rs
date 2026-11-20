@@ -28,6 +28,72 @@ pub fn tweak_env(cli_kind: &str, env: &mut Vec<(String, String)>) {
     }
 }
 
+/// Windows：把 CLI 子进程收拢进 Job Object（KILL_ON_JOB_CLOSE）。
+/// 经 cmd.exe / powershell 垫片启动时，真正的 CLI 是「孙子进程」，
+/// `Child::kill()` 只能杀掉垫片本身；关掉 Job 才能终止整棵进程树，
+/// 避免被取消/失败的 Run 留下 CLI 进程继续跑、继续消耗额度。
+#[cfg(windows)]
+mod job {
+    use std::os::windows::raw::HANDLE;
+
+    /// Job 句柄包装；仅在本模块创建、由 `AcpClient::drop` 调 `close` 关闭。
+    #[derive(Debug)]
+    pub struct JobHandle(HANDLE);
+
+    // 句柄只是内核对象标识，可安全跨线程携带；生命周期由 AcpClient 独占。
+    unsafe impl Send for JobHandle {}
+    unsafe impl Sync for JobHandle {}
+
+    /// 把指定进程挂到新建的 Job 上；失败（进程已退出/已被其它 Job 收编）时返回 None。
+    pub fn attach(pid: u32) -> Option<JobHandle> {
+        use windows_sys::Win32::Foundation::{CloseHandle, INVALID_HANDLE_VALUE};
+        use windows_sys::Win32::System::JobObjects::{
+            AssignProcessToJobObject, CreateJobObjectW, JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE,
+            JOBOBJECT_EXTENDED_LIMIT_INFORMATION, JobObjectExtendedLimitInformation,
+            SetInformationJobObject,
+        };
+        use windows_sys::Win32::System::Threading::{
+            OpenProcess, PROCESS_ACCESS_RIGHTS, PROCESS_SET_QUOTA, PROCESS_TERMINATE,
+        };
+
+        unsafe {
+            let access: PROCESS_ACCESS_RIGHTS = PROCESS_SET_QUOTA | PROCESS_TERMINATE;
+            let process = OpenProcess(access, 0, pid);
+            if process.is_null() || process == INVALID_HANDLE_VALUE {
+                // 进程已退出：没有需要收拢的进程树
+                return None;
+            }
+            let job = CreateJobObjectW(std::ptr::null(), std::ptr::null());
+            if job.is_null() {
+                CloseHandle(process);
+                return None;
+            }
+            let mut info: JOBOBJECT_EXTENDED_LIMIT_INFORMATION = std::mem::zeroed();
+            info.BasicLimitInformation.LimitFlags = JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE;
+            let ok = SetInformationJobObject(
+                job,
+                JobObjectExtendedLimitInformation,
+                std::ptr::addr_of!(info) as *const _,
+                std::mem::size_of::<JOBOBJECT_EXTENDED_LIMIT_INFORMATION>() as u32,
+            );
+            if ok == 0 || AssignProcessToJobObject(job, process) == 0 {
+                // 已被宿主（IDE/CI 的 Job）收编时无法加入：降级为仅杀直接子进程
+                tracing::debug!("Job Object 收拢失败（pid {pid}），进程树清理降级");
+                CloseHandle(job);
+                CloseHandle(process);
+                return None;
+            }
+            CloseHandle(process);
+            Some(JobHandle(job))
+        }
+    }
+
+    /// 关闭 Job：触发 KILL_ON_JOB_CLOSE，终止整棵进程树。
+    pub fn close(job: JobHandle) {
+        unsafe { windows_sys::Win32::Foundation::CloseHandle(job.0) };
+    }
+}
+
 /// 构建 ACP 子进程命令。
 /// Windows 上 npm 全局安装的 CLI 是 .cmd/.bat/.ps1 垫片，CreateProcess 不能直接执行，
 /// 需要经 cmd.exe / powershell 启动；其余情况优先使用 which 解析到的完整路径。
@@ -74,6 +140,9 @@ pub struct AcpClient {
     reader_handle: tokio::task::JoinHandle<()>,
     updates_rx: Option<mpsc::UnboundedReceiver<Value>>,
     requests_rx: Option<mpsc::UnboundedReceiver<IncomingRequest>>,
+    /// Windows：收拢整棵进程树的 Job 句柄，Drop 时关闭（见 `job` 模块）
+    #[cfg(windows)]
+    job: Option<job::JobHandle>,
 }
 
 impl AcpClient {
@@ -98,6 +167,10 @@ impl AcpClient {
         let stdin = child.stdin.take().ok_or_else(|| anyhow!("no stdin"))?;
         let stdout = child.stdout.take().ok_or_else(|| anyhow!("no stdout"))?;
         let stderr = child.stderr.take();
+
+        // Windows：立刻把子进程挂到 Job，之后它派生的所有 CLI 进程都在收拢范围内
+        #[cfg(windows)]
+        let job = child.id().and_then(job::attach);
 
         // stderr 单独走日志，不污染协议流
         if let Some(stderr) = stderr {
@@ -183,6 +256,8 @@ impl AcpClient {
             reader_handle,
             updates_rx: Some(updates_rx),
             requests_rx: Some(requests_rx),
+            #[cfg(windows)]
+            job,
         })
     }
 
@@ -281,12 +356,36 @@ impl AcpClient {
         .await
     }
 
+    /// 恢复已有 ACP 会话（CLI 需在 initialize 中声明 loadSession 能力）。
+    /// 用于 run 重试时续接上下文，避免每个重试都从零开始。
+    pub async fn load_session(
+        &self,
+        session_id: &str,
+        cwd: &Path,
+        mcp_servers: Vec<Value>,
+    ) -> Result<Value> {
+        let cwd_abs = std::path::absolute(cwd).unwrap_or_else(|_| cwd.to_path_buf());
+        self.request_timeout(
+            "session/load",
+            json!({ "sessionId": session_id, "cwd": cwd_abs.to_string_lossy(), "mcpServers": mcp_servers }),
+            60,
+        )
+        .await
+    }
+
     pub async fn prompt(&self, session_id: &str, text: &str) -> Result<Value> {
         self.request(
             "session/prompt",
             json!({ "sessionId": session_id, "prompt": [{ "type": "text", "text": text }] }),
         )
         .await
+    }
+
+    /// CLI 是否声明支持会话恢复（initialize 响应中的 agentCapabilities.loadSession）。
+    pub fn supports_load_session(init: &Value) -> bool {
+        init.pointer("/agentCapabilities/loadSession")
+            .and_then(|v| v.as_bool())
+            .unwrap_or(false)
     }
 
     pub async fn cancel(&self, session_id: &str) -> Result<()> {
@@ -315,7 +414,19 @@ impl AcpClient {
 impl Drop for AcpClient {
     fn drop(&mut self) {
         self.reader_handle.abort();
+        #[cfg(windows)]
+        if let Some(j) = self.job.take() {
+            // 关 Job 会连坐终止 cmd.exe 垫片下的孙子 CLI 进程
+            job::close(j);
+        }
     }
+}
+
+/// CLI 是否声明支持会话恢复（initialize 响应中的 agentCapabilities.loadSession）。
+pub fn supports_load_session(init: &Value) -> bool {
+    init.pointer("/agentCapabilities/loadSession")
+        .and_then(|v| v.as_bool())
+        .unwrap_or(false)
 }
 
 /// 取会话响应（或 config_option_update 事件）里的配置项数组。
@@ -482,6 +593,36 @@ pub async fn apply_model_effort(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// Windows 回归：垫片（cmd.exe）下的孙子进程必须随 Job 关闭一起终止。
+    /// 历史上只杀直接子进程时会留下真实 CLI 继续运行。
+    #[test]
+    #[cfg(windows)]
+    fn job_object_kills_grandchild_tree() {
+        use std::process::{Command, Stdio};
+        // ping 是 cmd.exe 的孙子进程，存活 30s；若未被收拢会活过整个测试
+        let mut child = Command::new("cmd.exe")
+            .args(["/C", "ping -n 30 127.0.0.1 > nul"])
+            .stdout(Stdio::null())
+            .stderr(Stdio::null())
+            .spawn()
+            .expect("启动 cmd.exe 失败");
+        let pid = child.id();
+        let job = job::attach(pid).expect("应能挂到 Job Object");
+        // 未关 Job 前进程必然存活
+        assert!(child.try_wait().unwrap().is_none(), "进程不应提前退出");
+        job::close(job);
+        // 关 Job 后整棵树（cmd.exe + ping）应在数秒内退出
+        let mut exited = false;
+        for _ in 0..50 {
+            if child.try_wait().unwrap().is_some() {
+                exited = true;
+                break;
+            }
+            std::thread::sleep(std::time::Duration::from_millis(100));
+        }
+        assert!(exited, "关闭 Job 后 cmd.exe 仍未退出，进程树收拢失效");
+    }
 
     #[test]
     fn catalog_supports_config_options_and_legacy_models() {
