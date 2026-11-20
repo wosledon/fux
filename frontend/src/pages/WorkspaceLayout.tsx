@@ -7,7 +7,7 @@ import MenuIcon from '@mui/icons-material/Menu'
 import LightModeIcon from '@mui/icons-material/LightMode'
 import DarkModeIcon from '@mui/icons-material/DarkMode'
 import ViewKanbanIcon from '@mui/icons-material/ViewKanban'
-import SmartToyIcon from '@mui/icons-material/SmartToy'
+import AutoAwesomeIcon from '@mui/icons-material/AutoAwesome'
 import InboxIcon from '@mui/icons-material/Inbox'
 import FolderIcon from '@mui/icons-material/Folder'
 import CategoryIcon from '@mui/icons-material/Category'
@@ -30,7 +30,7 @@ const NAV_GROUPS = [
   {
     label: '工作台', items: [
       { to: '', label: '工作看板', icon: <ViewKanbanIcon /> },
-      { to: 'assistant', label: 'AI 助理', icon: <SmartToyIcon /> },
+      { to: 'assistant', label: 'Fux Pilot', icon: <AutoAwesomeIcon /> },
       { to: 'inbox', label: '收件箱', icon: <InboxIcon /> },
       { to: 'projects', label: '项目', icon: <FolderIcon /> },
       { to: 'types', label: '任务类型', icon: <CategoryIcon /> },
